@@ -1,0 +1,18 @@
+{
+  // Cloudflare Workers — static assets only, no server-side Worker script.
+  // The app is plain HTML + CSS + ES modules, so the repository root IS the
+  // site. `.assetsignore` keeps everything that is not part of the site
+  // (node_modules, tests, docs, config) out of the upload.
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "metric-studio",
+  "compatibility_date": "2026-09-11",
+  "assets": {
+    "directory": ".",
+    // Hash routing means every URL is served by index.html; a wrong asset path
+    // should still fail loudly as 404 rather than silently return HTML.
+    "not_found_handling": "none"
+  },
+  "observability": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,27 @@
+# Files in this repository that must NOT be uploaded as site assets.
+# gitignore syntax, relative to the assets directory (the repository root).
+# Without this, `wrangler deploy` tries to upload node_modules — including
+# workerd (148 MiB), which exceeds Cloudflare's 25 MiB per-asset limit.
+
+node_modules
+.git
+.github
+.wrangler
+
+# Development-only parts of the repository
+tests
+scripts
+docs
+*.md
+
+# Tooling / config
+package.json
+package-lock.json
+bun.lockb
+bun.lock
+yarn.lock
+wrangler.jsonc
+wrangler.toml
+.assetsignore
+.gitignore
+.editorconfig

@@ -70,10 +70,40 @@ Saves use optimistic concurrency (`expectedVersion`). If a record was changed
 elsewhere, the drawer shows what changed and offers *Reload latest* or an
 explicit *Overwrite*; nothing is overwritten silently.
 
+## Deploy (Cloudflare Workers)
+
+The site is static, so there is no build step. `wrangler.jsonc` publishes the
+repository root as the asset directory and `.assetsignore` keeps everything
+that is not part of the site out of the upload:
+
+```sh
+npm run deploy       # npx wrangler deploy
+npm run preview      # npx wrangler dev
+```
+
+Connected to Cloudflare Workers Builds, the default deploy command
+(`npx wrangler deploy`) works as is — no dashboard settings to change.
+
+**Why `.assetsignore` matters:** the build container installs Wrangler into
+the repository, and Wrangler's own `node_modules/workerd` binary is ~148 MiB,
+far over Cloudflare's 25 MiB per-asset limit. Without the ignore list the
+deploy fails with *Asset too large*. The list also keeps `tests/`, `docs/`,
+`scripts/`, `package.json` and `.git` from being served publicly.
+
+`_headers` sends `index.html` with `Cache-Control: no-cache`, so a deploy
+never leaves a browser on an old entry point that references modules which no
+longer exist.
+
+Any other static host works the same way — serve the repository root (minus
+the development directories) and open `index.html`.
+
 ## Project layout
 
 ```
 index.html            entry, loads ./src/app.js as a module
+wrangler.jsonc        Cloudflare Workers static-asset config
+.assetsignore         files excluded from the published site
+_headers              response headers for the published site
 css/                  tokens, shell layout, components
 src/core/             models, store, selectors
 src/repositories/     contract + Memory / IndexedDB adapters, SharePoint skeleton
