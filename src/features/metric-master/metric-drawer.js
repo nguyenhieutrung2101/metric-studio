@@ -1,4 +1,4 @@
-import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
+import { h, btn, icon, clear } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { section } from '../../ui/components/section.js';
 import { combobox } from '../../ui/components/combobox.js';
@@ -544,13 +544,16 @@ export class MetricDrawer {
         savedAny = true;
         this._refreshHeader();
       }
+      let unresolved = 0;
       for (const [scenarioId, state] of this.bindingDrafts) {
         if (state.dirty) {
-          await this._persistBinding(scenarioId, { silent: true });
+          const saved = await this._persistBinding(scenarioId, { silent: true });
+          if (saved) unresolved += (saved.parsedReferences || []).filter((r) => r.status !== 'resolved').length;
           savedAny = true;
         }
       }
-      if (savedAny) ctx.toast.success(t('drawer.saved'));
+      if (savedAny && unresolved) ctx.toast.info(t('binding.savedWithMissing', { n: unresolved }), { duration: 5000 });
+      else if (savedAny) ctx.toast.success(t('drawer.saved'));
       this._updateDirty();
       this._renderAdvanced();
     } catch (err) {
@@ -560,8 +563,11 @@ export class MetricDrawer {
 
   async saveBinding(scenarioId) {
     try {
-      const saved = await this._persistBinding(scenarioId);
-      if (saved) this.ctx.toast.success(t('binding.saved', { scenario: this.ctx.store.get('scenarios', scenarioId)?.code }));
+      const saved = await this._persistBinding(scenarioId, { silent: true });
+      if (!saved) return;
+      const unresolved = (saved.parsedReferences || []).filter((r) => r.status !== 'resolved').length;
+      if (unresolved) this.ctx.toast.info(t('binding.savedWithMissing', { n: unresolved }), { duration: 5000 });
+      else this.ctx.toast.success(t('binding.saved', { scenario: this.ctx.store.get('scenarios', scenarioId)?.code }));
     } catch (err) {
       this._handleError(err);
     }

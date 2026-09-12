@@ -1,4 +1,4 @@
-import { h, btn, icon, formatNumber } from '../../ui/dom.js';
+import { h, icon, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { VirtualList } from '../../ui/table/virtual-list.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
@@ -127,7 +127,8 @@ export function mountBindingsView(container, ctx) {
   return {
     update(route) {
       if (route.params.coverage && route.params.coverage !== state.coverage) { state.coverage = route.params.coverage; markSeg(); refresh(); }
-      if (route.params.metric && store.has('metrics', route.params.metric)) ctx.openMetric(route.params.metric, { section: 'bindings' });
+      const metricId = route.params.metric;
+      if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId, { section: 'bindings' });
     },
     onDrawerClosed() { ctx.router.setParams({ metric: null }); list.refresh(); },
     onMetricOpened() { list.refresh(); },

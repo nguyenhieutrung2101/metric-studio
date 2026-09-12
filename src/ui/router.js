@@ -45,14 +45,20 @@ export function createRouter({ defaultPath = 'metrics' } = {}) {
         notify();
       }
     },
-    /** Update params of the current route without a history entry. */
+    /**
+     * Keep the URL in sync with view state without a history entry and
+     * without notifying listeners (the view already knows what it did).
+     */
     setParams(patch) {
       const params = { ...current.params };
       for (const [k, v] of Object.entries(patch)) {
         if (v == null || v === '') delete params[k];
         else params[k] = String(v);
       }
-      this.navigate(current.path, params, { replace: true });
+      const next = build(current.path, params);
+      if (next === location.hash) return;
+      history.replaceState(null, '', next);
+      current = parse(location.hash, defaultPath);
     },
     onChange(fn) {
       handlers.add(fn);

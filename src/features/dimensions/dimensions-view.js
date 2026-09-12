@@ -156,7 +156,8 @@ export function mountDimensionsView(container, ctx) {
     update(route) {
       const id = route.params.dimension;
       if (id && store.has('dimensions', id) && id !== state.dimensionId) { state.dimensionId = id; renderList(); renderDetail(); }
-      if (route.params.metric && store.has('metrics', route.params.metric)) ctx.openMetric(route.params.metric, { section: 'dimensions' });
+      const metricId = route.params.metric;
+      if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId, { section: 'dimensions' });
     },
     onDrawerClosed() { ctx.router.setParams({ metric: null }); },
     onMetricOpened() {},

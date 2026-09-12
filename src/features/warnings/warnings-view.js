@@ -1,4 +1,4 @@
-import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
+import { h, btn, icon, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { VirtualList } from '../../ui/table/virtual-list.js';
 import { severityDot } from '../../ui/components/chip.js';

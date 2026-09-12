@@ -111,7 +111,13 @@ export function mountMetricMasterView(container, ctx) {
       onDrop: async (payload, targetId, position) => {
         try {
           if (payload.type === METRIC_MIME) {
-            const fromNodeId = payload.fromNodeId && store.has('structureNodes', payload.fromNodeId) ? payload.fromNodeId : null;
+            // Dragging from a group moves it out of that group; from "All" / "Not in structure"
+            // a singly-placed metric is moved, a multi-placed one gains a placement.
+            let fromNodeId = payload.fromNodeId && store.has('structureNodes', payload.fromNodeId) ? payload.fromNodeId : null;
+            if (!fromNodeId) {
+              const placements = selectors.placementsByMetric(payload.id).filter((l) => store.has('structureNodes', l.structureNodeId));
+              if (placements.length === 1) fromNodeId = placements[0].structureNodeId;
+            }
             if (fromNodeId) await services.structure.moveMetric(payload.id, fromNodeId, targetId);
             else await services.structure.placeMetric(payload.id, targetId);
             ctx.toast.success(t('mm.metricMoved', { node: store.get('structureNodes', targetId).name }));
@@ -436,11 +442,14 @@ export function mountMetricMasterView(container, ctx) {
   fillAdvancedOptions();
   updateSortMarks();
   renderTree();
+  let initialised = false;
 
   return {
     update(route) {
       const nodeId = route.params.node || 'all';
-      if (nodeId !== state.nodeId) {
+      const first = !initialised;
+      initialised = true;
+      if (nodeId !== state.nodeId || first) {
         state.nodeId = nodeId;
         if (store.has('structureNodes', nodeId)) {
           const entry = selectors.structureTree().byId.get(nodeId);
@@ -448,9 +457,10 @@ export function mountMetricMasterView(container, ctx) {
         }
         renderTree();
         tree.reveal(nodeId);
+        refreshList({ keepScroll: false });
       }
-      refreshList({ keepScroll: false });
-      if (route.params.metric && store.has('metrics', route.params.metric)) ctx.openMetric(route.params.metric);
+      const metricId = route.params.metric;
+      if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId);
     },
     onDrawerClosed() {
       ctx.router.setParams({ metric: null });
