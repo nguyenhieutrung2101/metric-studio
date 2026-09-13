@@ -126,7 +126,7 @@ export async function start(rootEl) {
 
   validation.run();
   router.start();
-  globalThis.__metricStudio = ctx; // debugging / automation hook, no behaviour depends on it
+  globalThis.__metricStudio = { ...ctx, metricDrawer }; // debugging / automation hook, no behaviour depends on it
   return ctx;
 }
 

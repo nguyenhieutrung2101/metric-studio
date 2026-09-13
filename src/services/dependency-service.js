@@ -26,6 +26,12 @@ export function unknownScenarioCode(id) {
 export const SUBGRAPH_NODE_LIMIT = 300;
 
 /**
+ * And on edges. Layout cost and the number of SVG paths follow the edges,
+ * not the nodes: 300 nodes that all depend on each other are 44,850 edges.
+ */
+export const SUBGRAPH_EDGE_LIMIT = 900;
+
+/**
  * DependencyService
  *
  * Builds and caches the dependency graph from Formula bindings. Nodes are
@@ -190,13 +196,25 @@ export class DependencyService {
    *   breadth-first walk stops at the budget and the result is flagged
    *   `truncated` so the view can say so. One hub metric used by 5,000 others
    *   would otherwise lay out 5,001 cards at depth 1.
+   * @param {number} [opts.maxEdges]  the same ceiling on edges, which is the
+   *   one the layout and the SVG actually pay for.
    */
-  subgraph({ metricId, scenarioId, mode = 'same', depthDown = 3, depthUp = 1, expanded = new Set(), collapsed = new Set(), maxNodes = SUBGRAPH_NODE_LIMIT }) {
+  subgraph({ metricId, scenarioId, mode = 'same', depthDown = 3, depthUp = 1, expanded = new Set(), collapsed = new Set(), maxNodes = SUBGRAPH_NODE_LIMIT, maxEdges = SUBGRAPH_EDGE_LIMIT }) {
     const root = nodeKey(metricId, scenarioId);
     const nodes = new Map();
     const edges = new Map();
     const budget = Math.max(1, maxNodes);
+    const edgeBudget = Math.max(1, maxEdges);
     let truncated = false;
+    const addEdge = (edge) => {
+      if (edges.has(edge.id)) return true;
+      if (edges.size >= edgeBudget) {
+        truncated = true;
+        return false;
+      }
+      edges.set(edge.id, edge);
+      return true;
+    };
 
     const addNode = (key, depth) => {
       if (nodes.has(key)) {
@@ -246,11 +264,12 @@ export class DependencyService {
       for (const e of out) {
         // An edge whose endpoint the budget refused has nothing to point at,
         // so it stays out of the layout and the node keeps its fringe marker.
-        if (!addNode(e.to, depth + 1)) {
+        if (edges.size >= edgeBudget || !addNode(e.to, depth + 1)) {
           node.hasMoreDown = true;
+          truncated = truncated || edges.size >= edgeBudget;
           continue;
         }
-        edges.set(e.id, e);
+        addEdge(e);
         if (!visitedDown.has(e.to)) {
           visitedDown.add(e.to);
           queueDown.push([e.to, depth + 1]);
@@ -270,11 +289,12 @@ export class DependencyService {
         continue;
       }
       for (const e of inc) {
-        if (!addNode(e.from, -(depth + 1))) {
+        if (edges.size >= edgeBudget || !addNode(e.from, -(depth + 1))) {
           node.hasMoreUp = true;
+          truncated = truncated || edges.size >= edgeBudget;
           continue;
         }
-        edges.set(e.id, e);
+        addEdge(e);
         if (!visitedUp.has(e.from)) {
           visitedUp.add(e.from);
           queueUp.push([e.from, depth + 1]);
@@ -291,7 +311,14 @@ export class DependencyService {
     const cycleKeys = this.cycleMembers();
     for (const node of nodes.values()) node.inCycle = cycleKeys.has(node.key);
 
-    return { root, nodes, edges: [...edges.values()], truncated, nodeLimit: budget };
+    // A node the edge budget left unconnected is not worth a card of its own.
+    const connected = new Set([root]);
+    for (const e of edges.values()) {
+      connected.add(e.from);
+      connected.add(e.to);
+    }
+    for (const key of [...nodes.keys()]) if (!connected.has(key)) nodes.delete(key);
+    return { root, nodes, edges: [...edges.values()], truncated, nodeLimit: budget, edgeLimit: edgeBudget };
   }
 
   /** Keys reachable from `key` following edges in the given direction, within a subgraph edge list. */

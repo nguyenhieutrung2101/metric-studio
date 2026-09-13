@@ -5,6 +5,10 @@ import { createStructureNode, createMetricStructure } from '../core/models/struc
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
 import { createScenario } from '../core/models/scenario.js';
 import { createUnit } from '../core/models/unit.js';
+import { BindingType } from '../core/models/binding.js';
+import { parseFormula, distinctReferences, referenceIdentity } from './formula-parser.js';
+import { buildReferenceLookup, resolveReferenceIn } from '../core/reference-lookup.js';
+import { referenceKey } from '../utils/text.js';
 
 export const APP_ID = 'metric-studio';
 
@@ -189,31 +193,85 @@ export function parseSnapshot(input) {
     }
   }
 
-  // The model factory already dropped anything that was not a usable
-  // reference; say so rather than letting a file quietly lose its lineage.
-  for (let i = 0; i < data.bindings.length; i += 1) {
-    const incoming = lists.bindings.find((b) => b && b.id === data.bindings[i].id);
-    const before = Array.isArray(incoming && incoming.parsedReferences) ? incoming.parsedReferences.length : 0;
-    const after = data.bindings[i].parsedReferences.length;
-    if (before > after) addRepair('REFERENCE_DROPPED', 'Formula reference that was not usable: dropped and left to be re-parsed', before - after);
+  // `parsedReferences` is a cache derived from `formulaText`, and the formula
+  // text is the thing the user wrote. A cache that arrives damaged is
+  // rebuilt from the text it came from; accepting the damaged cache would let
+  // a file claim a formula metric depends on nothing, which is exactly the
+  // lineage the app exists to keep. Indexed by id once: looking each binding
+  // up in the incoming list would be quadratic, and a 25,000-binding import
+  // is an ordinary size.
+  const incomingById = new Map();
+  for (const b of lists.bindings) if (b && typeof b.id === 'string') incomingById.set(b.id, b);
+  const lookup = buildReferenceLookup(data.metrics);
+  const scenariosByCode = new Map();
+  for (const sc of data.scenarios) if (sc.code) scenariosByCode.set(referenceKey(sc.code), sc);
+
+  for (const b of data.bindings) {
+    if (b.type !== BindingType.FORMULA) continue;
+    const incoming = incomingById.get(b.id);
+    const cachedCount = Array.isArray(incoming && incoming.parsedReferences) ? incoming.parsedReferences.length : 0;
+    const dropped = cachedCount - b.parsedReferences.length;
+    if (dropped > 0) addRepair('REFERENCE_DROPPED', 'Formula reference that was not usable: dropped', dropped);
+
+    const parsed = parseFormula(b.formulaText);
+    const expected = distinctReferences(parsed.references);
+    // Compare by reference identity, not by count: a cache can be the right
+    // length and still name something the formula does not.
+    const have = new Set(b.parsedReferences.map((r) => referenceIdentity(r)));
+    const complete = expected.length === b.parsedReferences.length && expected.every((r) => have.has(referenceIdentity(r)));
+    if (!complete) {
+      b.parsedReferences = expected.map((r) => resolveAgainstFile(r, b.scenarioId));
+      if (cachedCount || expected.length) {
+        addRepair('REFERENCE_REPARSED', 'Formula reference cache that did not match the formula: rebuilt from the formula text', 1);
+      }
+      continue;
+    }
+    // The cache matches the formula. Only its resolution can still be stale.
+    for (const ref of b.parsedReferences) {
+      if (ref.metricId && !metricIds.has(ref.metricId)) {
+        const re = resolveAgainstFile(ref, b.scenarioId);
+        ref.metricId = re.metricId;
+        ref.status = re.status;
+        addRepair('REFERENCE_RESET', 'Cached formula reference pointing outside the file: re-resolved against the file');
+      }
+      if (ref.scenarioId && !scenarioIds.has(ref.scenarioId)) ref.scenarioId = resolveAgainstFile(ref, b.scenarioId).scenarioId;
+    }
   }
 
-  // Cached formula references pointing at metrics that are not in the file are
-  // reset so they get re-resolved instead of pointing into nothing.
+  // A non-formula binding has no business carrying formula references.
   for (const b of data.bindings) {
-    for (const ref of b.parsedReferences || []) {
-      if (ref.metricId && !metricIds.has(ref.metricId)) {
-        ref.metricId = null;
-        ref.status = 'missing';
-        addRepair('REFERENCE_RESET', 'Cached formula reference pointing outside the file: reset to be re-resolved');
-      }
-      if (ref.scenarioId && !scenarioIds.has(ref.scenarioId)) ref.scenarioId = b.scenarioId;
+    if (b.type !== BindingType.FORMULA && b.parsedReferences.length) {
+      b.parsedReferences = [];
+      addRepair('REFERENCE_DROPPED', 'Formula reference on a binding that is not a formula: dropped');
     }
   }
 
   const counts = {};
   for (const c of COLLECTIONS) counts[c] = data[c].length;
   return { ok: true, errors: [], repairs, data, counts, present };
+
+  /** Resolve one parsed reference against the records in this file alone. */
+  function resolveAgainstFile(ref, ownScenarioId) {
+    let scenarioId = ownScenarioId;
+    let status;
+    if (ref.scenarioCode) {
+      const sc = scenariosByCode.get(referenceKey(ref.scenarioCode));
+      if (sc) scenarioId = sc.id;
+      else status = 'unknown-scenario';
+    } else if (ref.scenarioId && scenarioIds.has(ref.scenarioId)) {
+      scenarioId = ref.scenarioId;
+    }
+    const hit = resolveReferenceIn(lookup, ref.token);
+    return {
+      raw: ref.raw || `[${ref.token}]`,
+      token: ref.token,
+      scenarioCode: ref.scenarioCode || null,
+      dimensionContext: ref.dimensionContext || null,
+      metricId: hit.metricId,
+      scenarioId,
+      status: status || hit.status,
+    };
+  }
 
   function fail(errs) {
     const counts0 = {};

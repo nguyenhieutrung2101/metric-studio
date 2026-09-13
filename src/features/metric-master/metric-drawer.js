@@ -26,6 +26,7 @@ export class MetricDrawer {
     this.base = null; // metric record as loaded (for dirty + conflict comparison)
     this.draft = null;
     this.bindingDrafts = new Map(); // scenarioId → { base, draft, dirty, preview }
+    this._openSeq = 0; // bumped on every open, so a late response knows it is late
     this.activeScenarioId = null;
     this.sections = {};
     this.els = {};
@@ -44,6 +45,7 @@ export class MetricDrawer {
       this._focus(focusSection, scenarioId);
       return;
     }
+    this._openSeq += 1;
     this.metricId = metricId;
     this.base = metric;
     this.draft = pickMetric(metric);
@@ -538,11 +540,16 @@ export class MetricDrawer {
     let savedAny = false;
     try {
       if (!sameMetric(this.draft, pickMetric(this.base))) {
-        const saved = await ctx.services.metrics.update(this.metricId, this.draft, tokenOf(this.base));
-        this.base = saved;
-        this.draft = pickMetric(saved);
-        savedAny = true;
-        this._refreshHeader();
+        // What was sent, and which editor sent it. A save is not instant, and
+        // the user keeps typing during it. The service gets a copy taken now,
+        // so what lands is what the user had when they pressed Save rather
+        // than whatever the draft happens to hold when the request is read.
+        const outgoing = { ...this.draft, aliases: [...(this.draft.aliases || [])], tags: [...(this.draft.tags || [])] };
+        const sent = JSON.stringify(outgoing);
+        const seq = this._openSeq;
+        const saved = await ctx.services.metrics.update(this.metricId, outgoing, tokenOf(this.base));
+        if (this._adoptMetric(seq, sent, saved)) savedAny = true;
+        else return;
       }
       let unresolved = 0;
       for (const [scenarioId, state] of this.bindingDrafts) {
@@ -583,8 +590,22 @@ export class MetricDrawer {
       this._updateDirty();
       return null;
     }
+    const sent = JSON.stringify(d);
+    const seq = this._openSeq;
     const { binding, resolution } = await this.ctx.services.bindings.setBinding(this.metricId, scenarioId, d, state.base ? tokenOf(state.base) : null);
-    this.bindingDrafts.set(scenarioId, { base: binding, draft: pickBinding(binding), dirty: false, preview: state.preview });
+    // The drawer may have moved to another metric while this was in flight;
+    // the record is saved either way, but it is not this editor's any more.
+    if (seq !== this._openSeq) return binding;
+    const now = this.bindingDrafts.get(scenarioId);
+    const typedMeanwhile = now && JSON.stringify(now.draft) !== sent;
+    this.bindingDrafts.set(scenarioId, {
+      base: binding,
+      // Keep what the user has typed since; only the saved baseline and its
+      // token move forward, so the next save builds on this one.
+      draft: typedMeanwhile ? now.draft : pickBinding(binding),
+      dirty: !!typedMeanwhile,
+      preview: state.preview,
+    });
     if (resolution && !silent) {
       const missing = resolution.references.filter((r) => r.status !== 'resolved').length;
       if (missing) this.ctx.toast.info(t('binding.savedWithMissing', { n: missing }));
@@ -593,6 +614,20 @@ export class MetricDrawer {
     if (this.activeScenarioId === scenarioId) this._renderBindingPanel();
     this._updateDirty();
     return binding;
+  }
+
+  /**
+   * Take the saved record as the new baseline without discarding edits made
+   * while the save was in flight, and without writing into an editor that has
+   * since moved to a different metric.
+   * @returns {boolean} whether this editor adopted the response
+   */
+  _adoptMetric(seq, sent, saved) {
+    if (seq !== this._openSeq) return false;
+    this.base = saved;
+    if (JSON.stringify(this.draft) === sent) this.draft = pickMetric(saved);
+    this._refreshHeader();
+    return true;
   }
 
   async _removeBinding(scenarioId) {

@@ -27,11 +27,20 @@ import { Repository, NotImplementedError, COLLECTIONS } from './repository.js';
  * depends on SharePoint's numeric item Id.
  *
  * Uniqueness: the relationships in `UNIQUE_KEYS` must be enforced by the
- * list itself, with a calculated column holding the composite key and the
- * "enforce unique values" setting on its index. Client-side checks do not
- * survive twenty concurrent users. Business codes are deliberately not
- * enforced there: legacy workbooks contain duplicates that must arrive and be
- * reported.
+ * list itself. SharePoint can enforce unique values only on an indexed
+ * column, and a calculated column cannot be indexed, so the composite key
+ * goes in a physical single line of text column that the adapter writes
+ * itself on every save (`metricId|scenarioId` and so on), indexed with
+ * "enforce unique values". Client-side checks do not survive twenty
+ * concurrent users. Business codes are deliberately not enforced there:
+ * legacy workbooks contain duplicates that must arrive and be reported.
+ *
+ * Canonical codes: `allocateCode` must not be ported as a read-max-then-write.
+ * It needs a sequence item per prefix in a small list, updated with
+ * If-Match on its own ETag and retried on 412, so that two users creating a
+ * metric at the same moment cannot be handed the same M.000123. The
+ * canonical code column is then also indexed and unique — separately from
+ * the legacy codes, which live on the binding as metadata and in `aliases`.
  *
  * Write consistency: SharePoint does NOT roll back a failed multi-item
  * request, and our cascades span four different lists, where cross-list
@@ -59,7 +68,10 @@ export class SharePointRepository extends Repository {
   }
 
   describe() {
-    return { persistent: true, kind: 'sharepoint', detail: this.siteUrl };
+    // Stated explicitly rather than left undefined: a caller that asks
+    // whether a batch is atomic must get `false`, not `undefined`, and
+    // restore points have nowhere to live in a SharePoint list.
+    return { persistent: true, kind: 'sharepoint', atomicBatch: false, restorePoints: false, detail: this.siteUrl };
   }
 
   async init() {

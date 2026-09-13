@@ -93,9 +93,17 @@ drawer shows what changed and offers *Reload latest* or an explicit
   for the same scenario, two placements in one group, or two links to one
   dimension. Duplicate business codes are allowed in and reported as findings,
   because legacy workbooks contain them.
-* **Two writes cannot cross.** Every mutation goes through one queue, so a
-  check and its write are never separated by an await. Racing saves end with
-  one winner and one explicit conflict, never two silent winners.
+* **Two writes cannot cross — including from two tabs.** Every mutation goes
+  through one queue, and every expected token is compared again inside the
+  transaction that writes, against the database rather than against this
+  tab's copy of it. Racing saves end with one winner and one explicit
+  conflict, never two silent winners. Canonical codes come from a sequence in
+  the database, so two tabs creating a metric at the same moment get two
+  different codes.
+* **A formula means what it says.** The parsed references on a binding are a
+  cache of the formula text. An import that arrives with that cache damaged
+  rebuilds it from the formula rather than believing it, so a file can never
+  quietly turn a calculated metric into one that depends on nothing.
 
 ## Deploy (Cloudflare Workers)
 
@@ -156,6 +164,12 @@ docs/ARCHITECTURE.md  architecture and decisions
   presence, SPFx packaging.
 
 Integrity and concurrency hardening (v0.2) is done: transactional writes,
-serialised mutations, schema-validated import, restore points, uniqueness at
-the persistence boundary, a strict Content-Security-Policy, and
-failure-injection plus regression test suites (105 tests, `npm test`).
+serialised mutations, compare-and-set against the database itself, invariant
+guards that run where the records live, sequence-allocated codes,
+schema-validated import that re-parses formulas, restore points, uniqueness
+enforced by unique indexes, a strict Content-Security-Policy, and
+failure-injection plus regression test suites (115 tests, `npm test`).
+
+Still open before a multi-user pilot: reconciliation after a partial batch on
+a non-atomic backend, integration tests against real IndexedDB, a CI merge
+gate, and the SharePoint adapter itself.

@@ -14,6 +14,24 @@
 export class UnitOfWork {
   constructor() {
     this.ops = [];
+    this.guards = [];
+  }
+
+  /**
+   * An invariant that must still hold where the data actually lives.
+   *
+   * Serialising commands inside one repository instance is not enough when
+   * the store is shared: two tabs each hold their own mirror, so each can
+   * check an acyclic tree and together produce a cycle. A guard is re-run by
+   * the adapter against the records it reads inside the same transaction that
+   * writes, and throwing from it aborts the whole batch.
+   *
+   * @param {string} collection records to read
+   * @param {(records: object[]) => void} check throws to refuse the batch
+   */
+  guard(collection, check) {
+    this.guards.push({ collection, check });
+    return this;
   }
 
   save(collection, record, expectedToken = null) {
@@ -40,7 +58,29 @@ export class UnitOfWork {
 export async function commit(repo, store, work) {
   const ops = work instanceof UnitOfWork ? work.ops : work;
   if (!ops.length) return { saved: [], removed: [] };
-  const result = await repo.applyBatch(ops);
+  const result = await repo.applyBatch(ops, { guards: work instanceof UnitOfWork ? work.guards : [] });
+  mirror(store, result);
+  return result;
+}
+
+/**
+ * Run a command inside the repository's critical section, so the invariants
+ * it checks still hold when it writes, then mirror the acknowledged result.
+ * `plan` receives a handle onto the repository's own records.
+ */
+export async function commitExclusive(repo, store, plan) {
+  const result = await repo.runExclusive(async (tx) => {
+    const work = await plan(tx);
+    const ops = work instanceof UnitOfWork ? work.ops : work;
+    if (!ops || !ops.length) return { saved: [], removed: [] };
+    return tx.applyBatch(ops, { guards: work instanceof UnitOfWork ? work.guards : [] });
+  });
+  mirror(store, result);
+  return result;
+}
+
+/** Push an acknowledged repository result into the store in one change. */
+export function mirror(store, result) {
   const upserts = {};
   const removals = {};
   for (const { collection, record } of result.saved) {
@@ -52,5 +92,4 @@ export async function commit(repo, store, work) {
     removals[collection].push(id);
   }
   store.applyChanges({ upserts, removals });
-  return result;
 }

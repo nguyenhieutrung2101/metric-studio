@@ -1,4 +1,5 @@
 import { normalizeText, referenceKey, compareText } from '../../utils/text.js';
+import { buildReferenceLookup, resolveReferenceIn } from '../reference-lookup.js';
 
 const EMPTY_SET = new Set();
 const EMPTY_ARRAY = Object.freeze([]);
@@ -288,40 +289,13 @@ export function createSelectors(store) {
     return out;
   };
 
-  const referenceLookup = () =>
-    cached('referenceLookup', ['metrics'], () => {
-      const byCode = new Map();
-      const byAlias = new Map();
-      const byName = new Map();
-      const push = (map, key, id) => {
-        if (!key) return;
-        if (!map.has(key)) map.set(key, []);
-        const arr = map.get(key);
-        if (!arr.includes(id)) arr.push(id);
-      };
-      for (const m of store.list('metrics')) {
-        push(byCode, referenceKey(m.code), m.id);
-        for (const a of m.aliases || []) push(byAlias, referenceKey(a), m.id);
-        push(byName, referenceKey(m.name), m.id);
-      }
-      return { byCode, byAlias, byName };
-    });
+  const referenceLookup = () => cached('referenceLookup', ['metrics'], () => buildReferenceLookup(store.list('metrics')));
 
   /**
    * Resolve a formula reference token to a metric.
    * Priority: code → alias → exact name. Several hits at the winning level = ambiguous.
    */
-  const resolveReference = (token) => {
-    const key = referenceKey(token);
-    if (!key) return { status: 'missing', metricId: null, candidates: [] };
-    const { byCode, byAlias, byName } = referenceLookup();
-    for (const map of [byCode, byAlias, byName]) {
-      const ids = map.get(key);
-      if (ids && ids.length === 1) return { status: 'resolved', metricId: ids[0], candidates: ids };
-      if (ids && ids.length > 1) return { status: 'ambiguous', metricId: null, candidates: ids };
-    }
-    return { status: 'missing', metricId: null, candidates: [] };
-  };
+  const resolveReference = (token) => resolveReferenceIn(referenceLookup(), token);
 
   /** Ranked metric suggestions for a partial reference / search string. */
   const suggestMetrics = (query, limit = 8, exclude = null) => {

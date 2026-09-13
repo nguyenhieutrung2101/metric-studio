@@ -246,7 +246,7 @@ export const vi = {
   'dep.stats': '{nodes} nút · {edges} liên kết hiển thị · {total} liên kết toàn danh mục · {cycles} vòng lặp',
   'dep.unknownScenario': 'kịch bản không tồn tại',
   'dep.unknownScenarioHint': 'Không có kịch bản nào mang mã {code} nên tham chiếu này không trỏ tới đâu. Sửa tiền tố kịch bản trong công thức, hoặc thêm kịch bản tại More ▾ → Dữ liệu gốc.',
-  'dep.truncated': 'Đang hiển thị {n} nút đầu tiên. Giảm số cấp hoặc chọn gốc gần hơn để xem phần còn lại.',
+  'dep.truncated': 'Quá lớn để vẽ đầy đủ — đang hiển thị tối đa {n} nút và {e} liên kết. Giảm số cấp hoặc chọn gốc gần hơn để xem phần còn lại.',
 
   // dimensions
   'dims.title': 'Chiều phân tích',

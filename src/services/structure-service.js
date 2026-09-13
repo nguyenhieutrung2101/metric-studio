@@ -1,7 +1,7 @@
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { ValidationFailure } from './metric-service.js';
-import { UnitOfWork, commit } from './unit-of-work.js';
+import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 
 /**
  * StructureService — the governance hierarchy and metric placements.
@@ -64,18 +64,57 @@ export class StructureService {
   }
 
   /** Move a node under a new parent, optionally at a position among siblings. */
+  /**
+   * Move a node under a new parent.
+   *
+   * "Does this move create a cycle?" is a question about the whole hierarchy,
+   * so asking it against the store and writing afterwards is not enough: two
+   * moves can each see an acyclic tree, each be allowed, and together make
+   * A the parent of B and B the parent of A. The check therefore runs inside
+   * the repository's critical section, against the records the repository
+   * itself holds.
+   */
   async moveNode(id, newParentId, index = null) {
-    const node = this.store.get('structureNodes', id);
-    if (!node) throw new NotFoundError('structureNodes', id);
     const parentId = newParentId || null;
-    if (parentId === id || (parentId && this.isDescendant(parentId, id))) throw new ValidationFailure('Cannot move a node into its own subtree');
-    if (parentId && !this.store.has('structureNodes', parentId)) throw new NotFoundError('structureNodes', parentId);
-    const siblings = this._siblings(parentId, id);
-    const at = index == null ? siblings.length : Math.max(0, Math.min(index, siblings.length));
-    siblings.splice(at, 0, node);
-    const work = new UnitOfWork();
-    this._resequence(work, siblings, id, parentId);
-    await commit(this.repo, this.store, work);
+    if (parentId === id) throw new ValidationFailure('Cannot move a node into its own subtree');
+    await commitExclusive(this.repo, this.store, (tx) => {
+      const nodes = tx.list('structureNodes');
+      const byId = new Map(nodes.map((n) => [n.id, n]));
+      const node = byId.get(id);
+      if (!node) throw new NotFoundError('structureNodes', id);
+      if (parentId && !byId.has(parentId)) throw new NotFoundError('structureNodes', parentId);
+      if (parentId && isDescendantIn(byId, parentId, id)) throw new ValidationFailure('Cannot move a node into its own subtree');
+
+      const siblings = nodes
+        .filter((n) => (n.parentId || null) === parentId && n.id !== id)
+        .sort((a, b) => a.sortOrder - b.sortOrder);
+      const at = index == null ? siblings.length : Math.max(0, Math.min(index, siblings.length));
+      siblings.splice(at, 0, node);
+      const work = new UnitOfWork();
+      let order = 1;
+      for (const s of siblings) {
+        const current = byId.get(s.id);
+        if (!current) continue;
+        const next = { ...current, sortOrder: order, parentId: s.id === id ? parentId : current.parentId };
+        order += 1;
+        if (next.sortOrder !== current.sortOrder || next.parentId !== current.parentId) {
+          work.save('structureNodes', next, tokenOf(current));
+        }
+      }
+      // The critical section covers this instance. Another tab has its own,
+      // and its own mirror, so the question is asked again against the stored
+      // hierarchy at the moment of writing.
+      if (parentId) {
+        work.guard('structureNodes', (stored) => {
+          const live = new Map(stored.map((n) => [n.id, n]));
+          live.set(id, { ...(live.get(id) || node), parentId });
+          if (isDescendantIn(live, parentId, id) || hasCycleAt(live, id)) {
+            throw new ValidationFailure('Cannot move a node into its own subtree');
+          }
+        });
+      }
+      return work;
+    });
     return this.store.get('structureNodes', id);
   }
 
@@ -209,4 +248,33 @@ export class StructureService {
     this.store.upsert('metricStructures', saved);
     return saved;
   }
+}
+
+/**
+ * Walk parent links in a snapshot of the hierarchy. Carries a guard so a
+ * hierarchy that is already cyclic answers instead of looping.
+ */
+function isDescendantIn(byId, nodeId, ancestorId) {
+  let cur = byId.get(nodeId);
+  const seen = new Set();
+  while (cur && cur.parentId) {
+    if (cur.parentId === ancestorId) return true;
+    if (seen.has(cur.id)) return false;
+    seen.add(cur.id);
+    cur = byId.get(cur.parentId);
+  }
+  return false;
+}
+
+/** Does following parents from `startId` come back to where it started? */
+function hasCycleAt(byId, startId) {
+  const seen = new Set();
+  let cur = byId.get(startId);
+  while (cur && cur.parentId) {
+    if (seen.has(cur.id)) return true;
+    seen.add(cur.id);
+    cur = byId.get(cur.parentId);
+    if (cur && cur.id === startId) return true;
+  }
+  return false;
 }

@@ -124,7 +124,7 @@ export function mountDependencyView(container, ctx) {
     }
     state.graph = dep.subgraph({ metricId: state.metricId, scenarioId: state.scenarioId, mode: state.mode, depthDown: state.depthDown, depthUp: state.depthUp, expanded: state.expanded, collapsed: state.collapsed });
     truncatedNote.hidden = !state.graph.truncated;
-    if (state.graph.truncated) truncatedNote.textContent = t('dep.truncated', { n: formatNumber(state.graph.nodeLimit) });
+    if (state.graph.truncated) truncatedNote.textContent = t('dep.truncated', { n: formatNumber(state.graph.nodeLimit), e: formatNumber(state.graph.edgeLimit) });
     view.setGraph(state.graph, { keepView });
     if (state.selected && !state.graph.nodes.has(state.selected)) state.selected = null;
     applyHighlight();

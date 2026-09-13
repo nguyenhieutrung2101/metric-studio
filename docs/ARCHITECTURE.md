@@ -234,7 +234,7 @@ never overwrites. Presence ("Trung is editing Revenue · GD") is a separate
 
 ### 4.1 Integrity rules (v0.2)
 
-Six rules hold at the persistence boundary. The failure-injection suite in
+Eight rules hold at the persistence boundary. The failure-injection suite in
 `tests/integrity.test.mjs` and the regression suite in
 `tests/regressions.test.mjs` keep them honest.
 
@@ -287,11 +287,38 @@ database no longer had.
 
 **Structural uniqueness is enforced where the data lives, not in the UI.**
 One binding per Metric × Scenario, one placement per Metric × Node, one link
-per Metric × Dimension. `UNIQUE_KEYS` in `core/collections.js` is the list a
-SharePoint adapter will mirror with indexed unique columns. Business codes
-are deliberately *not* in that list: a legacy workbook does contain duplicate
+per Metric × Dimension. `UNIQUE_KEYS` in `core/collections.js` drives a unique
+IndexedDB index on each of those three stores, and is the list a SharePoint
+adapter will mirror with indexed unique columns. Business codes are
+deliberately *not* in that list: a legacy workbook does contain duplicate
 metric codes, and those must arrive and be reported by the warning centre
 rather than blocking the import.
+
+**The mirror is a cache; the database decides.** Comparing a token against the
+in-memory mirror only speaks for this connection. A second tab has its own
+mirror, so both could pass that check and the second would overwrite the
+first with no warning. Every expected token therefore travels with the plan
+and is compared again inside the readwrite transaction that performs the
+write, and a refused write refreshes the mirror from what was actually read,
+so the retry is judged against the truth. Uniqueness likewise moves from a
+scan of the mirror to the database's own index.
+
+**An invariant that spans records is checked where the records live.**
+Serialising writes protects one record at a time. "Does this move create a
+cycle?" is a question about the whole hierarchy, and two moves can each see
+an acyclic tree, each be allowed, and together produce a cycle. A `UnitOfWork`
+can therefore carry a `guard`: a check the adapter re-runs against the
+collection it reads inside the writing transaction, aborting the batch if it
+throws. `commitExclusive` adds the matching critical section inside one
+instance, so both the fast local case and the two-tab case are covered.
+
+**Canonical codes are allocated, not guessed.** Reading the highest existing
+code and then writing the record is a check-then-act like any other: three
+creates started at once would all read the same maximum. `allocateCode` runs
+inside the write queue and keeps a high-water mark, and the IndexedDB adapter
+reads and bumps a sequence record inside its own transaction, so two tabs
+cannot be handed the same `M.000123`. `nextCode()` survives only as the
+placeholder in the create form.
 
 ### 4.1b One definition of reference identity
 
@@ -324,13 +351,37 @@ successor list on the frame. Rebuilding it on every step of the walk over that
 same list makes one node with N dependencies cost N², which measured 749 ms
 for N = 5,000 — on the main thread, on every validation pass.
 
-**A focused subgraph has a node ceiling** (`SUBGRAPH_NODE_LIMIT`, 300). The
-breadth-first expansion stops at the budget, the outermost nodes keep their
-"more" markers, and the result is flagged `truncated` so the view says so
-above the canvas. One hub metric used by 2,000 others would otherwise lay out
-2,001 cards at depth 1 — the one thing the focused graph exists to avoid.
-Edges whose endpoint the budget refused are left out entirely, so the layout
-never has to place an edge with one end missing.
+**A focused subgraph has a node ceiling and an edge ceiling**
+(`SUBGRAPH_NODE_LIMIT`, 300; `SUBGRAPH_EDGE_LIMIT`, 900). The breadth-first
+expansion stops at either budget, the outermost nodes keep their "more"
+markers, and the result is flagged `truncated` so the view says so above the
+canvas. One hub metric used by 2,000 others would otherwise lay out 2,001
+cards at depth 1 — the one thing the focused graph exists to avoid. The edge
+ceiling is the one that matters for cost: layout time and the number of SVG
+paths follow edges, and 300 nodes that all depend on each other are 44,850
+edges, so a node budget alone bounds nothing. Edges whose endpoint the budget
+refused are left out entirely and nodes left unconnected are dropped, so the
+layout never has to place an edge with one end missing.
+
+### 4.1d The cache never outranks the source
+
+`parsedReferences` on a binding is derived from `formulaText`; the formula
+text is what a user wrote. An import that accepted a damaged cache would let a
+file claim that a formula metric depends on nothing — and it would look
+correct, because the formula is still displayed and validation has nothing to
+complain about.
+
+So the boundary re-parses. Every formula binding's cache is compared against
+the formula by *reference identity*, not by count (a cache can be the right
+length and still name the wrong metric), and rebuilt from the text whenever it
+disagrees, resolving against the records in the file itself. A binding that is
+not a formula keeps no references at all. Each case is reported:
+`REFERENCE_REPARSED`, `REFERENCE_DROPPED`, `REFERENCE_RESET`.
+
+Resolution is defined once, in `core/reference-lookup.js`, and used both by
+the selectors over the live store and by the boundary over a file being
+imported — otherwise a formula could mean one thing during the import and
+another one after it.
 
 ### 4.2 The schema boundary
 
@@ -393,6 +444,17 @@ and serves only what `.assetsignore` leaves in the published site
 development server that hands `.git` or `package.json` to everyone on the
 same café network is a real leak even when the deployed site is configured
 correctly. The allow-list is exported and tested rather than swept by hand.
+
+### 4.5 What the editor owes the person typing
+
+A save is not instant, and people keep typing during one. The drawer sends a
+copy of the draft taken at the moment of saving, and when the response comes
+back it moves the baseline and the token forward but replaces the draft only
+if the draft is still byte-for-byte what was sent. Anything typed meanwhile
+survives and the editor stays dirty, so the next save builds on this one.
+Every save also carries the sequence number of the drawer that started it: a
+response that arrives after the user has opened a different metric updates
+nothing, because that editor is not the one that asked.
 
 ---
 

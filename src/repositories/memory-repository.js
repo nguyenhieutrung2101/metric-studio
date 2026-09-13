@@ -1,5 +1,6 @@
 import { Repository, ConflictError, NotFoundError, COLLECTIONS, assertCollection, clone, tokenOf } from './repository.js';
 import { uniqueKeyOf } from '../core/collections.js';
+import { padNumber } from '../utils/text.js';
 
 /** Thrown when a write would create a second record for a unique relationship. */
 export class UniquenessError extends Error {
@@ -31,6 +32,7 @@ export class MemoryRepository extends Repository {
     for (const c of COLLECTIONS) this._data[c] = new Map();
     this._restorePoints = new Map();
     this._restoreSeq = 0;
+    this._sequences = new Map();
     this._writeQueue = Promise.resolve();
   }
 
@@ -79,8 +81,8 @@ export class MemoryRepository extends Repository {
     return this._serialize(() => this._removeNow(collection, id, expectedToken));
   }
 
-  applyBatch(ops) {
-    return this._serialize(() => this._applyBatchNow(ops));
+  applyBatch(ops, options) {
+    return this._serialize(() => this._applyBatchNow(ops, options));
   }
 
   saveMany(collection, records) {
@@ -93,6 +95,47 @@ export class MemoryRepository extends Repository {
 
   clear() {
     return this._serialize(() => this._clearNow());
+  }
+
+  /**
+   * Run a command that must see a consistent world.
+   *
+   * Serialising each write is not enough for an invariant that spans several
+   * records: two moves can each check that they create no cycle, then each
+   * write, and together produce one. The check has to happen inside the same
+   * critical section as the write, against the records the repository holds
+   * rather than against a mirror that is updated afterwards. The handle
+   * reaches the unserialised operations directly, because the caller already
+   * owns the queue slot.
+   */
+  runExclusive(fn) {
+    return this._serialize(() => fn({
+      list: (collection) => {
+        assertCollection(collection);
+        return [...this._data[collection].values()].map(clone);
+      },
+      get: (collection, id) => {
+        assertCollection(collection);
+        const r = this._data[collection].get(id);
+        return r ? clone(r) : null;
+      },
+      applyBatch: (ops, options) => this._applyBatchNow(ops, options),
+      save: (collection, record, expectedToken) => this._saveNow(collection, record, expectedToken),
+      remove: (collection, id, expectedToken) => this._removeNow(collection, id, expectedToken),
+    }));
+  }
+
+  /**
+   * Allocate the next canonical code for a collection.
+   *
+   * Reading the highest existing code and then writing a record is a
+   * check-then-act across an await like any other, so it runs inside the
+   * write queue and the high-water mark is remembered rather than recomputed:
+   * three creates started at once must produce three codes, not one code
+   * three times. `pattern` extracts the number from an existing code.
+   */
+  allocateCode(collection, { prefix, width, pattern }) {
+    return this._serialize(() => this._allocateCodeNow(collection, { prefix, width, pattern }));
   }
 
   createRestorePoint(label = '', options = {}) {
@@ -118,8 +161,11 @@ export class MemoryRepository extends Repository {
   }
 
   // ------------------------------------------------------------ batch
-  async _applyBatchNow(ops) {
+  async _applyBatchNow(ops, { guards = [] } = {}) {
     if (!Array.isArray(ops)) throw new Error('applyBatch expects an array of operations');
+    // Fail fast against what this instance knows; the adapter re-runs the
+    // same guards against the durable store, which is the one that decides.
+    for (const g of guards) g.check([...this._data[g.collection].values()].map(clone));
     const puts = [];
     const deletes = [];
     const touched = new Set();
@@ -165,7 +211,7 @@ export class MemoryRepository extends Repository {
       if (!plan) continue;
       ordered.push(op.op === 'remove' ? { kind: 'delete', ...plan } : { kind: 'put', ...plan });
     }
-    await this._commit({ puts, deletes, ops: ordered });
+    await this._commit({ puts, deletes, ops: ordered, guards });
     for (const p of puts) this._data[p.collection].set(p.record.id, p.record);
     for (const d of deletes) this._data[d.collection].delete(d.id);
     return {
@@ -187,6 +233,10 @@ export class MemoryRepository extends Repository {
   }
 
   async _replaceAllNow(snapshot) {
+    // The catalogue is about to be someone else's; codes must be re-derived
+    // from it rather than carried over from the one being replaced.
+    this._sequences.clear();
+    await this._clearSequences();
     const puts = [];
     for (const c of COLLECTIONS) {
       assertCollection(c);
@@ -202,9 +252,43 @@ export class MemoryRepository extends Repository {
   }
 
   async _clearNow() {
+    this._sequences.clear();
+    await this._clearSequences();
     await this._commit({ clearAll: true });
     for (const c of COLLECTIONS) this._data[c].clear();
   }
+
+  // ------------------------------------------------------------ code allocation
+  async _allocateCodeNow(collection, { prefix, width, pattern }) {
+    assertCollection(collection);
+    const key = `${collection}:${prefix}`;
+    const floor = () => this._highestCode(collection, pattern) + 1;
+    const next = await this._nextSequenceValue(key, this._sequences.get(key) ?? null, floor);
+    this._sequences.set(key, next + 1);
+    return `${prefix}${padNumber(next, width)}`;
+  }
+
+  _highestCode(collection, pattern) {
+    let max = 0;
+    for (const record of this._data[collection].values()) {
+      const m = pattern.exec(record.code || '');
+      if (m) max = Math.max(max, Number(m[1]) || 0);
+    }
+    return max;
+  }
+
+  /**
+   * The value to hand out. In memory the queue is the only writer, so the
+   * remembered mark is authoritative; an adapter whose store is shared with
+   * other connections overrides this to read and bump the sequence inside one
+   * transaction.
+   */
+  async _nextSequenceValue(key, remembered, floor) {
+    return Math.max(remembered ?? 0, floor());
+  }
+
+  /** Durable sequences, if the adapter keeps any. */
+  async _clearSequences() {}
 
   // ------------------------------------------------------------ restore points
   async listRestorePoints() {
@@ -266,7 +350,12 @@ export class MemoryRepository extends Repository {
     saved.concurrencyToken = String(saved.version);
     saved.updatedAt = new Date().toISOString();
     if (!saved.createdAt) saved.createdAt = existing ? existing.createdAt : saved.updatedAt;
-    return { collection, record: saved };
+    // `expected` travels with the plan so an adapter whose durable store can
+    // be written by someone else (another tab, another user) can repeat the
+    // check where the data actually lives, inside its own transaction. The
+    // check above is against this instance's mirror, which only speaks for
+    // this instance.
+    return { collection, record: saved, expected };
   }
 
   /**
@@ -300,7 +389,7 @@ export class MemoryRepository extends Repository {
     if (expectedToken != null && tokenOf(existing) !== String(expectedToken)) {
       throw new ConflictError(collection, id, String(expectedToken), clone(existing));
     }
-    return { collection, id };
+    return { collection, id, expected: expectedToken == null ? null : String(expectedToken), optional };
   }
 
   _prepareBulk(collection, records) {

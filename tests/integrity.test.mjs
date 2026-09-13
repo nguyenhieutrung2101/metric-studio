@@ -462,8 +462,8 @@ test('the graph keeps one edge per metric and lists every slice on it', async ()
 test('a cascade queues dependent records before the record they depend on', async () => {
   const ctx = await createContext();
   const seen = [];
-  const original = ctx.repo.applyBatch.bind(ctx.repo);
-  ctx.repo.applyBatch = async (ops) => {
+  const original = ctx.repo._applyBatchNow.bind(ctx.repo);
+  ctx.repo._applyBatchNow = async (ops) => {
     seen.push(...ops.map((o) => `${o.op}:${o.collection}`));
     return original(ops);
   };
@@ -476,8 +476,8 @@ test('a cascade queues dependent records before the record they depend on', asyn
 test('a dimension delete queues its members and links before the dimension', async () => {
   const ctx = await createContext();
   const seen = [];
-  const original = ctx.repo.applyBatch.bind(ctx.repo);
-  ctx.repo.applyBatch = async (ops) => {
+  const original = ctx.repo._applyBatchNow.bind(ctx.repo);
+  ctx.repo._applyBatchNow = async (ops) => {
     seen.push(...ops.map((o) => `${o.op}:${o.collection}`));
     return original(ops);
   };

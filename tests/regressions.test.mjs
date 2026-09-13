@@ -144,8 +144,8 @@ test('dimension members are deleted children first', async () => {
   ctx.store.hydrate(await ctx.repo.replaceAll({ dimensions: [dim], dimensionMembers: tree }));
 
   const order = [];
-  const realBatch = ctx.repo.applyBatch.bind(ctx.repo);
-  ctx.repo.applyBatch = (ops) => {
+  const realBatch = ctx.repo._applyBatchNow.bind(ctx.repo);
+  ctx.repo._applyBatchNow = (ops) => {
     for (const op of ops) if (op.op === 'remove' && op.collection === 'dimensionMembers') order.push(op.id);
     return realBatch(ops);
   };
@@ -289,3 +289,184 @@ test('the dev server serves the published site and nothing else', async () => {
     await once(server, 'close');
   }
 });
+
+// ------------------------------------------------------- wave 2: cross-record invariants
+
+test('two opposing moves cannot both succeed and make a cycle', async () => {
+  const ctx = await createContext({ seed: false });
+  const a = createStructureNode({ id: 's-a', name: 'A' });
+  const b = createStructureNode({ id: 's-b', name: 'B' });
+  ctx.store.hydrate(await ctx.repo.replaceAll({ structureNodes: [a, b] }));
+
+  const results = await Promise.allSettled([
+    ctx.structure.moveNode('s-a', 's-b'),
+    ctx.structure.moveNode('s-b', 's-a'),
+  ]);
+  assert.equal(results.filter((r) => r.status === 'rejected').length, 1, 'one move is refused');
+  const pa = ctx.store.get('structureNodes', 's-a').parentId;
+  const pb = ctx.store.get('structureNodes', 's-b').parentId;
+  assert.ok(!(pa === 's-b' && pb === 's-a'), `A→${pa} and B→${pb} is a cycle`);
+});
+
+test('a cascade sees records created after the store was last mirrored', async () => {
+  const ctx = await createContext();
+  const metric = await ctx.metrics.create({ name: 'Chỉ tiêu mới' });
+  // A binding lands in the repository without the store hearing about it,
+  // which is what a second tab or a lost notification looks like.
+  await ctx.repo.save('bindings', createBinding({ id: 'b-unseen', metricId: metric.id, scenarioId: GD, type: 'source' }), null);
+  assert.equal(ctx.store.has('bindings', 'b-unseen'), false, 'the store does not know about it');
+
+  await ctx.metrics.remove(metric.id);
+  const left = (await ctx.repo.list('bindings')).filter((b) => b.metricId === metric.id);
+  assert.deepEqual(left, [], 'no binding outlives the metric it belongs to');
+});
+
+test('concurrent creates never share a canonical code', async () => {
+  const ctx = await createContext({ seed: false });
+  const metrics = await Promise.all([1, 2, 3, 4, 5].map((n) => ctx.metrics.create({ name: `Metric ${n}` })));
+  const codes = metrics.map((m) => m.code);
+  assert.equal(new Set(codes).size, codes.length, `duplicate codes: ${codes.join(' ')}`);
+
+  const dims = await Promise.all([1, 2, 3].map((n) => ctx.dimensions.createDimension({ name: `Dim ${n}` })));
+  const dimCodes = dims.map((d) => d.code);
+  assert.equal(new Set(dimCodes).size, dimCodes.length, `duplicate dimension codes: ${dimCodes.join(' ')}`);
+});
+
+test('an optimistic write is re-checked against the durable store, not the mirror', async () => {
+  // A repository whose durable store can be changed by someone else, which is
+  // what a second tab on the same IndexedDB is. The mirror check passes; only
+  // a check inside the commit can catch it.
+  const shared = new Map();
+  class SharedRepo extends MemoryRepository {
+    describe() { return { persistent: true, kind: 'shared', atomicBatch: true, restorePoints: false }; }
+    async _commit(plan) {
+      for (const p of plan.puts || []) {
+        if (p.expected === undefined) continue;
+        const stored = shared.get(p.record.id) || null;
+        const actual = stored ? tokenOf(stored) : null;
+        if (actual !== p.expected) throw new ConflictError(p.collection, p.record.id, p.expected, stored);
+      }
+      for (const p of plan.puts || []) shared.set(p.record.id, p.record);
+      for (const d of plan.deletes || []) shared.delete(d.id);
+    }
+  }
+  const repo = new SharedRepo();
+  await repo.init();
+  const saved = await repo.save('metrics', createMetric({ id: 'm-1', name: 'Doanh thu', code: 'M.000001' }));
+
+  // Someone else advances the durable record. Our mirror still shows v1.
+  shared.set('m-1', { ...saved, version: 2, concurrencyToken: '2', name: 'theirs' });
+
+  await assert.rejects(
+    () => repo.save('metrics', { ...saved, name: 'mine' }, tokenOf(saved)),
+    (err) => err instanceof ConflictError,
+    'a stale token is refused by the store that actually holds the record',
+  );
+  assert.equal(shared.get('m-1').name, 'theirs', 'their write survives');
+});
+
+// ------------------------------------------------------- wave 2: import fidelity
+
+test('a damaged reference cache is rebuilt from the formula text', async () => {
+  const ctx = await createContext();
+  const before = ctx.dependencies.edgesFrom(`m-revenue|${TT}`).map((e) => e.token).sort();
+  assert.deepEqual(before, ['PRICE', 'VOLUME']);
+
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.metricId === 'm-revenue' && x.scenarioId === TT);
+  b.parsedReferences = [null, null]; // the cache is rubbish; the formula is not
+
+  const parsed = parseSnapshot(snapshot);
+  assert.ok(parsed.repairs.some((r) => r.code === 'REFERENCE_REPARSED'));
+  await ctx.backup.importSnapshot(snapshot);
+
+  const after = ctx.dependencies.edgesFrom(`m-revenue|${TT}`).map((e) => e.token).sort();
+  assert.deepEqual(after, ['PRICE', 'VOLUME'], 'the dependencies the formula states are back');
+});
+
+test('a reference cache that disagrees with the formula loses', async () => {
+  const ctx = await createContext();
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.metricId === 'm-revenue' && x.scenarioId === TT);
+  // Right number of references, wrong references: a count check would pass.
+  b.parsedReferences = [
+    { raw: '[OPEX]', token: 'OPEX', metricId: 'm-opex', scenarioId: TT, status: 'resolved' },
+    { raw: '[PRICE]', token: 'PRICE', metricId: 'm-price', scenarioId: TT, status: 'resolved' },
+  ];
+  const parsed = parseSnapshot(snapshot);
+  const out = parsed.data.bindings.find((x) => x.id === b.id);
+  assert.deepEqual(out.parsedReferences.map((r) => r.token).sort(), ['PRICE', 'VOLUME']);
+  assert.ok(parsed.repairs.some((r) => r.code === 'REFERENCE_REPARSED'));
+});
+
+test('a dimension context of the wrong type is rebuilt, not dropped', async () => {
+  const ctx = await createContext();
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.metricId === 'm-revenue' && x.scenarioId === TT);
+  b.formulaText = '[VOLUME | Product=HRC] * [PRICE]';
+  b.parsedReferences = [{ token: 'VOLUME', dimensionContext: 'not an array' }, { token: 'PRICE' }];
+  const out = parseSnapshot(snapshot).data.bindings.find((x) => x.id === b.id);
+  const volume = out.parsedReferences.find((r) => r.token === 'VOLUME');
+  assert.deepEqual(volume.dimensionContext, [{ dimension: 'Product', member: 'HRC' }]);
+});
+
+test('a binding that is not a formula keeps no formula references', async () => {
+  const ctx = await createContext();
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.type === 'source');
+  b.parsedReferences = [{ token: 'REVENUE', metricId: 'm-revenue', status: 'resolved' }];
+  const parsed = parseSnapshot(snapshot);
+  assert.equal(parsed.data.bindings.find((x) => x.id === b.id).parsedReferences.length, 0);
+  assert.ok(parsed.repairs.some((r) => r.code === 'REFERENCE_DROPPED'));
+});
+
+test('parsing a snapshot grows with the file, not with its square', async () => {
+  const { buildLargeSnapshot } = await import('../src/data/seed.js');
+  const work = (n) => {
+    const data = buildLargeSnapshot({ metrics: n, dimensions: 10 });
+    const started = process.hrtime.bigint();
+    const r = parseSnapshot({ app: 'metric-studio', schemaVersion: 1, data });
+    assert.equal(r.ok, true);
+    return { ms: Number(process.hrtime.bigint() - started) / 1e6, bindings: data.bindings.length };
+  };
+  work(500); // warm the JIT so the first real sample is not the outlier
+  const small = work(2000);
+  const large = work(8000);
+  const dataRatio = large.bindings / small.bindings;
+  const timeRatio = large.ms / Math.max(small.ms, 1);
+  // Quadratic would be ~16x for 4x the data. Linear is ~4x; allow generous
+  // headroom for a noisy machine while still failing on a square.
+  assert.ok(timeRatio < dataRatio * 2.5, `x${dataRatio.toFixed(1)} data took x${timeRatio.toFixed(1)} time (${small.ms.toFixed(0)}ms → ${large.ms.toFixed(0)}ms)`);
+});
+
+// ------------------------------------------------------- wave 2: graph and editor
+
+test('a dense subgraph is bounded by edges, not only by nodes', async () => {
+  const { store, selectors } = complete(200);
+  const dep = new DependencyService(store, selectors);
+  const g = dep.subgraph({ metricId: 'm-199', scenarioId: TT, depthDown: 5, depthUp: 1 });
+  assert.equal(g.truncated, true);
+  assert.ok(g.edges.length <= g.edgeLimit, `${g.edges.length} edges over a budget of ${g.edgeLimit}`);
+  assert.ok(g.nodes.size <= g.nodeLimit);
+  for (const e of g.edges) {
+    assert.ok(g.nodes.has(e.from) && g.nodes.has(e.to), 'every drawn edge has both ends');
+  }
+  const tight = dep.subgraph({ metricId: 'm-199', scenarioId: TT, depthDown: 5, depthUp: 1, maxEdges: 25 });
+  assert.ok(tight.edges.length <= 25);
+});
+
+/** `n` metrics where each depends on every earlier one: n(n-1)/2 edges. */
+function complete(n) {
+  const store = new Store();
+  const selectors = createSelectors(store);
+  const metrics = [];
+  const bindings = [];
+  for (let i = 0; i < n; i += 1) metrics.push(createMetric({ id: `m-${i}`, name: `M${i}`, code: `M.${String(i).padStart(6, '0')}` }));
+  for (let i = 1; i < n; i += 1) {
+    const refs = [];
+    for (let j = 0; j < i; j += 1) refs.push({ raw: `[M${j}]`, token: `M${j}`, metricId: `m-${j}`, scenarioId: TT, status: 'resolved' });
+    bindings.push(createBinding({ id: `b-${i}`, metricId: `m-${i}`, scenarioId: TT, type: 'formula', formulaText: refs.map((r) => r.raw).join(' + '), parsedReferences: refs }));
+  }
+  store.hydrate({ metrics, bindings, scenarios: SCENARIOS });
+  return { store, selectors };
+}

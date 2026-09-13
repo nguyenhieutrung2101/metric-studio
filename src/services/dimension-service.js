@@ -4,6 +4,8 @@ import { referenceKey } from '../utils/text.js';
 import { ValidationFailure } from './metric-service.js';
 import { UnitOfWork, commit } from './unit-of-work.js';
 
+const DIMENSION_CODE = /^DIM(\d+)$/i;
+
 /** DimensionService — dimensions, their member hierarchy and Metric ↔ Dimension links. */
 export class DimensionService {
   constructor({ store, selectors, repo }) {
@@ -12,10 +14,11 @@ export class DimensionService {
     this.repo = repo;
   }
 
+  /** Preview only; the real code is allocated by the repository at save time. */
   nextCode() {
     let max = 0;
     for (const d of this.store.list('dimensions')) {
-      const m = /^DIM(\d+)$/i.exec(d.code || '');
+      const m = DIMENSION_CODE.exec(d.code || '');
       if (m) max = Math.max(max, Number(m[1]));
     }
     return `DIM${String(max + 1).padStart(2, '0')}`;
@@ -24,7 +27,8 @@ export class DimensionService {
   async createDimension({ code = '', name, description = '' }) {
     const label = String(name || '').trim();
     if (!label) throw new ValidationFailure('Name is required', 'name');
-    const finalCode = String(code || '').trim() || this.nextCode();
+    const finalCode = String(code || '').trim()
+      || await this.repo.allocateCode('dimensions', { prefix: 'DIM', width: 2, pattern: DIMENSION_CODE });
     if (this.store.list('dimensions').some((d) => referenceKey(d.code) === referenceKey(finalCode))) throw new ValidationFailure(`Dimension code "${finalCode}" is already used`, 'code');
     const sortOrder = this.store.count('dimensions') + 1;
     const saved = await this.repo.saveDimension(createDimension({ code: finalCode, name: label, description, sortOrder }), null);

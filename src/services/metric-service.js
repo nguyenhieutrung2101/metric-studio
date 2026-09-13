@@ -2,7 +2,7 @@ import { createMetric, MetricStatus } from '../core/models/metric.js';
 import { createMetricStructure } from '../core/models/structure.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { referenceKey, padNumber } from '../utils/text.js';
-import { UnitOfWork, commit } from './unit-of-work.js';
+import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 
 export class ValidationFailure extends Error {
   constructor(message, field = null) {
@@ -28,6 +28,12 @@ export class MetricService {
     this.codePrefix = codePrefix;
   }
 
+  /**
+   * Preview of the next code, for the placeholder in the create form only.
+   * The code a metric actually gets is allocated by the repository at save
+   * time: this reads the store, which two concurrent creates would read
+   * identically.
+   */
   nextCode() {
     const prefix = this.codePrefix;
     let max = 0;
@@ -40,6 +46,11 @@ export class MetricService {
     return `${prefix}${padNumber(max + 1, 6)}`;
   }
 
+  /** The canonical-code pattern, shared with the repository's allocator. */
+  get _codePattern() {
+    return new RegExp(`^${this.codePrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)$`);
+  }
+
   _assertCodeUnique(code, exceptId = null) {
     const ids = this.selectors.metricsByCode().get(referenceKey(code)) || [];
     if (ids.some((id) => id !== exceptId)) throw new ValidationFailure(`Metric code "${code}" is already used`, 'code');
@@ -49,7 +60,11 @@ export class MetricService {
   async create(input, { structureNodeId = null, isPrimary = true } = {}) {
     const name = String(input.name || '').trim();
     if (!name) throw new ValidationFailure('Name is required', 'name');
-    const code = String(input.code || '').trim() || this.nextCode();
+    // Allocated inside the repository's write queue, and for a durable
+    // adapter inside a transaction, so two creates started at once cannot be
+    // handed the same number.
+    const code = String(input.code || '').trim()
+      || await this.repo.allocateCode('metrics', { prefix: this.codePrefix, width: 6, pattern: this._codePattern });
     this._assertCodeUnique(code);
     const metric = createMetric({ ...input, name, code, version: 0 });
     const work = new UnitOfWork().save('metrics', metric, null);
@@ -79,15 +94,28 @@ export class MetricService {
    * fewer bindings, which is retryable, instead of orphan bindings pointing
    * at a metric that is gone.
    */
+  /**
+   * Delete a metric and everything that only exists because of it.
+   *
+   * What depends on the metric is collected inside the repository's critical
+   * section: reading the store first would miss a binding or a placement
+   * created since the store was last mirrored, and that record would outlive
+   * the metric it points at.
+   */
   async remove(id, expectedToken) {
-    const existing = this.store.get('metrics', id);
-    if (!existing) throw new NotFoundError('metrics', id);
-    const work = new UnitOfWork();
-    for (const l of this.store.list('metricStructures')) if (l.metricId === id) work.remove('metricStructures', l.id, tokenOf(l), { optional: true });
-    for (const b of this.store.list('bindings')) if (b.metricId === id) work.remove('bindings', b.id, tokenOf(b), { optional: true });
-    for (const l of this.store.list('metricDimensions')) if (l.metricId === id) work.remove('metricDimensions', l.id, tokenOf(l), { optional: true });
-    work.remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
-    await commit(this.repo, this.store, work);
+    if (!this.store.has('metrics', id)) throw new NotFoundError('metrics', id);
+    await commitExclusive(this.repo, this.store, (tx) => {
+      const existing = tx.get('metrics', id);
+      if (!existing) throw new NotFoundError('metrics', id);
+      const work = new UnitOfWork();
+      for (const collection of ['metricStructures', 'bindings', 'metricDimensions']) {
+        for (const r of tx.list(collection)) {
+          if (r.metricId === id) work.remove(collection, r.id, tokenOf(r), { optional: true });
+        }
+      }
+      work.remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
+      return work;
+    });
     return true;
   }
 
