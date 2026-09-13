@@ -1,7 +1,8 @@
 import { createMetric, MetricStatus } from '../core/models/metric.js';
 import { createMetricStructure } from '../core/models/structure.js';
-import { NotFoundError } from '../repositories/repository.js';
+import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { referenceKey, padNumber } from '../utils/text.js';
+import { UnitOfWork, commit } from './unit-of-work.js';
 
 export class ValidationFailure extends Error {
   constructor(message, field = null) {
@@ -13,10 +14,11 @@ export class ValidationFailure extends Error {
 
 /**
  * MetricService — the only writer of the `metrics` collection.
+ *
  * Identity rules live here: ids are never reassigned, codes are unique and
- * allocated sequentially, and deleting a metric cascades its link records
- * (placements, bindings, dimension links) but never rewrites other metrics'
- * formulas — those become visible "missing reference" warnings.
+ * allocated sequentially, and deleting a metric removes its link records in
+ * the same transaction. Other metrics' formulas keep their text and surface
+ * as "missing reference" warnings, which is the visible failure we want.
  */
 export class MetricService {
   constructor({ store, selectors, repo, codePrefix = 'M.' }) {
@@ -43,55 +45,42 @@ export class MetricService {
     if (ids.some((id) => id !== exceptId)) throw new ValidationFailure(`Metric code "${code}" is already used`, 'code');
   }
 
+  /** The metric and its first placement are created together or not at all. */
   async create(input, { structureNodeId = null, isPrimary = true } = {}) {
     const name = String(input.name || '').trim();
     if (!name) throw new ValidationFailure('Name is required', 'name');
     const code = String(input.code || '').trim() || this.nextCode();
     this._assertCodeUnique(code);
     const metric = createMetric({ ...input, name, code, version: 0 });
-    const saved = await this.repo.saveMetric(metric, null);
-    this.store.upsert('metrics', saved);
+    const work = new UnitOfWork().save('metrics', metric, null);
     if (structureNodeId && this.store.has('structureNodes', structureNodeId)) {
-      const link = createMetricStructure({ metricId: saved.id, structureNodeId, isPrimary });
-      const savedLink = await this.repo.saveMetricStructure(link, null);
-      this.store.upsert('metricStructures', savedLink);
+      work.save('metricStructures', createMetricStructure({ metricId: metric.id, structureNodeId, isPrimary }), null);
     }
-    return saved;
+    const result = await commit(this.repo, this.store, work);
+    return result.saved.find((s) => s.collection === 'metrics').record;
   }
 
-  async update(id, patch, expectedVersion) {
+  async update(id, patch, expectedToken) {
     const existing = this.store.get('metrics', id);
     if (!existing) throw new NotFoundError('metrics', id);
     const merged = createMetric({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
     if (!merged.code) merged.code = existing.code || this.nextCode();
     this._assertCodeUnique(merged.code, id);
-    const saved = await this.repo.saveMetric(merged, expectedVersion == null ? existing.version : expectedVersion);
+    const saved = await this.repo.saveMetric(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('metrics', saved);
     return saved;
   }
 
-  async remove(id, expectedVersion) {
+  /** Metric plus every record that only exists because of it, in one transaction. */
+  async remove(id, expectedToken) {
     const existing = this.store.get('metrics', id);
     if (!existing) throw new NotFoundError('metrics', id);
-    // Version check first so a stale delete does not cascade anything.
-    await this.repo.deleteMetric(id, expectedVersion == null ? existing.version : expectedVersion);
-    this.store.remove('metrics', id);
-    const cascade = [
-      ['metricStructures', this.store.list('metricStructures').filter((l) => l.metricId === id)],
-      ['bindings', this.store.list('bindings').filter((b) => b.metricId === id)],
-      ['metricDimensions', this.store.list('metricDimensions').filter((l) => l.metricId === id)],
-    ];
-    for (const [collection, records] of cascade) {
-      for (const r of records) {
-        try {
-          await this.repo.remove(collection, r.id, null);
-        } catch (err) {
-          if (err.name !== 'NotFoundError') throw err;
-        }
-      }
-      this.store.removeMany(collection, records.map((r) => r.id));
-    }
+    const work = new UnitOfWork().remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
+    for (const l of this.store.list('metricStructures')) if (l.metricId === id) work.remove('metricStructures', l.id, tokenOf(l));
+    for (const b of this.store.list('bindings')) if (b.metricId === id) work.remove('bindings', b.id, tokenOf(b));
+    for (const l of this.store.list('metricDimensions')) if (l.metricId === id) work.remove('metricDimensions', l.id, tokenOf(l));
+    await commit(this.repo, this.store, work);
     return true;
   }
 

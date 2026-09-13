@@ -425,3 +425,19 @@ span.stat { cursor: default; }
 .detail-col:last-child { border-right: none; }
 .detail-col .link-list { padding: 8px; overflow: auto; }
 .member-tree { flex: 1; }
+
+/* ---------- import preview & restore points ---------- */
+.preview-block { margin-top: 8px; padding: 8px 10px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-sm); }
+.preview-block.error { border-color: rgba(207, 34, 46, 0.35); background: var(--danger-soft); }
+.preview-block.warn { border-color: rgba(179, 89, 0, 0.35); background: var(--warning-soft); }
+.preview-title { display: flex; align-items: center; gap: 6px; font-weight: 600; margin-bottom: 4px; }
+.preview-block.error .preview-title { color: var(--danger); }
+.preview-block.warn .preview-title { color: var(--warning); }
+.repair-list, .error-list { display: flex; flex-direction: column; gap: 2px; }
+.repair-list li, .error-list li { padding-left: 12px; position: relative; line-height: 1.4; }
+.repair-list li::before, .error-list li::before { content: "·"; position: absolute; left: 3px; }
+.restore-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.restore-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.restore-meta { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.35; }
+.restore-meta strong { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.restore-actions { display: flex; gap: 4px; flex: none; }

@@ -7,7 +7,7 @@ let lang = getPreference('lang', 'en');
 if (!DICTS[lang]) lang = 'en';
 const listeners = new Set();
 
-/** t('metric.status.draft') / t('list.count', { n: 3 }) — missing keys fall back to English, then to a humanised key. */
+/** t('metric.status.draft') / t('mm.count', { n: 3 }) — missing keys fall back to English, then to a humanised key. */
 export function t(key, params = null) {
   let s = DICTS[lang][key];
   if (s == null) s = DICTS.en[key];

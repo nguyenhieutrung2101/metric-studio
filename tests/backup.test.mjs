@@ -11,8 +11,9 @@ test('export → import round-trips every collection byte for byte', async () =>
   assert.equal(parsed.app, 'metric-studio');
   assert.equal(parsed.schemaVersion, 1);
   const fresh = await createContext({ seed: false });
-  const counts = await fresh.backup.importSnapshot(json);
+  const { counts, repairs } = await fresh.backup.importSnapshot(json);
   assert.equal(counts.metrics, ctx.store.count('metrics'));
+  assert.deepEqual(repairs, [], 'our own export needs no repair');
   const a = JSON.stringify(ctx.store.snapshot());
   const b = JSON.stringify(fresh.store.snapshot());
   assert.equal(a, b);
@@ -27,14 +28,15 @@ test('inspect rejects malformed backups', () => {
   const good = BackupService.inspect({ metrics: [{ id: 'a', name: 'A' }] });
   assert.equal(good.ok, true);
   assert.equal(good.counts.metrics, 1);
+  assert.equal(good.data.metrics[0].status, 'draft', 'records come back fully normalised');
 });
 
 test('large synthetic dataset stays acyclic, resolves and indexes quickly', async () => {
   const t0 = Date.now();
   const snap = buildLargeSnapshot({ metrics: 3000, dimensions: 120 });
   const fresh = await createContext({ seed: false });
-  const saved = await fresh.repo.replaceAll(snap);
-  fresh.store.hydrate(saved);
+  const { counts } = await fresh.backup.replaceWith(snap, { label: 'large' });
+  assert.equal(counts.metrics, 3000);
   assert.equal(fresh.store.count('metrics'), 3000);
   assert.ok(fresh.store.count('dimensions') >= 120);
   assert.ok(fresh.store.count('metricDimensions') > 5000);

@@ -266,7 +266,7 @@ export function mountMetricMasterView(container, ctx) {
       dragend: () => row.classList.remove('dragging'),
     } },
       h('span', { class: 'col-code mono', text: m.code }),
-      h('span', { class: 'col-name' }, h('span', { class: 'name-text', text: m.name }), m.aliases.length ? h('span', { class: 'name-alias', text: m.aliases.slice(0, 2).join(' · ') }) : null),
+      h('span', { class: 'col-name' }, h('span', { class: 'name-text', text: m.name }), (m.aliases || []).length ? h('span', { class: 'name-alias', text: m.aliases.slice(0, 2).join(' · ') }) : null),
       h('span', { class: 'col-unit muted', text: unit ? unit.code : '' }),
       ...selectors.scenarios().map((s) => h('span', { class: 'col-binding' }, bindingChip(s.code, cov[s.id], { compact: true }))),
       h('span', { class: 'col-dims muted', text: dims ? String(dims) : '' }),

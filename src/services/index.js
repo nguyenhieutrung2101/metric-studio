@@ -5,5 +5,7 @@ export { DimensionService } from './dimension-service.js';
 export { DependencyService } from './dependency-service.js';
 export { validateAll, indexIssues, worstSeverity, Severity } from './validation-service.js';
 export { BackupService } from './backup-service.js';
+export { parseSnapshot } from './snapshot-schema.js';
+export { UnitOfWork, commit } from './unit-of-work.js';
 export { LocalPresenceService } from './presence-service.js';
 export * as FormulaParser from './formula-parser.js';

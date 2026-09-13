@@ -10,6 +10,7 @@ import { BackupService } from './services/backup-service.js';
 import { LocalPresenceService } from './services/presence-service.js';
 import { validateAll, indexIssues } from './services/validation-service.js';
 import { buildDemoSnapshot } from './data/seed.js';
+import { parseSnapshot } from './services/snapshot-schema.js';
 import { h, btn, icon, clear, formatNumber } from './ui/dom.js';
 import { t, setLanguage, getLanguage, onLanguageChange, LANGUAGES } from './ui/i18n.js';
 import { createRouter } from './ui/router.js';
@@ -51,7 +52,10 @@ export async function start(rootEl) {
   const snapshot = await repo.loadAll();
   const isEmpty = !Object.values(snapshot).some((arr) => arr.length > 0);
   if (isEmpty) {
-    const saved = await repo.replaceAll(buildDemoSnapshot());
+    // The seed goes through the same schema boundary as any imported file.
+    const parsed = parseSnapshot(buildDemoSnapshot());
+    if (!parsed.ok) throw new Error(`Demo data is invalid: ${parsed.errors.join('; ')}`);
+    const saved = await repo.replaceAll(parsed.data);
     store.hydrate(saved);
   } else store.hydrate(snapshot);
 

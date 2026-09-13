@@ -2,14 +2,32 @@ import { COLLECTIONS } from '../core/collections.js';
 
 export { COLLECTIONS };
 
-/** Thrown when expectedVersion does not match the stored version. */
+/**
+ * Optimistic-concurrency token.
+ *
+ * `version` is the domain revision: a small integer meant for humans ("you
+ * opened v12, the current one is v13"). `concurrencyToken` is the opaque
+ * value the backend uses to detect a stale write. Local adapters derive the
+ * token from the version; a SharePoint adapter will put its ETag there
+ * verbatim. Nothing outside a repository adapter may parse, compare with
+ * `<`/`>`, or do arithmetic on a token.
+ */
+export function tokenOf(record) {
+  if (record == null) return null;
+  if (record.concurrencyToken != null) return String(record.concurrencyToken);
+  if (record.version == null) return null;
+  return String(record.version);
+}
+
+/** Thrown when the expected concurrency token does not match the stored one. */
 export class ConflictError extends Error {
-  constructor(collection, id, expectedVersion, current) {
-    super(`Conflict on ${collection}/${id}: expected version ${expectedVersion}, current is ${current ? current.version : 'deleted'}`);
+  constructor(collection, id, expectedToken, current) {
+    const currentLabel = current ? `v${current.version}` : 'deleted';
+    super(`Conflict on ${collection}/${id}: expected token ${expectedToken}, current is ${currentLabel}`);
     this.name = 'ConflictError';
     this.collection = collection;
     this.id = id;
-    this.expectedVersion = expectedVersion;
+    this.expectedToken = expectedToken;
     this.current = current || null;
   }
 }
@@ -33,20 +51,28 @@ export class NotImplementedError extends Error {
 /**
  * Repository contract.
  *
- * Generic operations are the adapter surface; the named helpers below are
- * convenience wrappers so services read naturally. Every save takes an
- * expectedVersion and returns the acknowledged record (with the new version).
- * Adapters must reject stale saves with ConflictError and never overwrite.
+ * Rules every adapter must honour:
+ *
+ * 1. A write is acknowledged only after it is durable. The in-memory mirror
+ *    is updated *after* the backing store confirms, never before.
+ * 2. `save` and `remove` take the caller's expected concurrency token and
+ *    reject a stale write with ConflictError. Nothing is overwritten
+ *    silently.
+ * 3. `applyBatch`, `replaceAll` and `clear` are all-or-nothing. A failure
+ *    anywhere leaves the store exactly as it was. An adapter that genuinely
+ *    cannot be atomic must say so in `describe().atomicBatch === false` so
+ *    callers can choose a different strategy.
+ * 4. Records handed out are copies. Mutating a returned object never changes
+ *    what is stored.
  */
 export class Repository {
-  /** Open connections, run migrations. */
   async init() {
     return this;
   }
 
-  /** @returns {{ persistent: boolean, kind: string, detail?: string }} */
+  /** @returns {{ persistent: boolean, kind: string, atomicBatch: boolean, restorePoints: boolean, detail?: string }} */
   describe() {
-    return { persistent: false, kind: 'abstract' };
+    return { persistent: false, kind: 'abstract', atomicBatch: false, restorePoints: false };
   }
 
   /** Full snapshot { collection: record[] } used to hydrate the store. */
@@ -63,25 +89,34 @@ export class Repository {
   }
 
   /**
-   * Save a record.
    * @param {string} collection
-   * @param {object} record  full record; record.version is ignored, expectedVersion is used
-   * @param {number|null} expectedVersion  null/undefined means "must be new"
+   * @param {object} record full record; its own version/token fields are ignored
+   * @param {string|null} expectedToken token from the record the caller read,
+   *        or null/undefined when the record must not exist yet
    */
-  async save(collection, record, expectedVersion) {
+  async save(collection, record, expectedToken) {
     throw new NotImplementedError(`save(${collection})`);
   }
 
-  async remove(collection, id, expectedVersion) {
+  async remove(collection, id, expectedToken) {
     throw new NotImplementedError(`remove(${collection}, ${id})`);
   }
 
-  /** Bulk write without version checks (seeding, import). Returns saved records. */
+  /**
+   * Apply several writes as one unit.
+   * @param {Array<{op: 'save'|'remove', collection: string, record?: object, id?: string, expectedToken?: string|null}>} ops
+   * @returns {Promise<{saved: Array<{collection, record}>, removed: Array<{collection, id}>}>}
+   */
+  async applyBatch(ops) {
+    throw new NotImplementedError('applyBatch');
+  }
+
+  /** Bulk write without token checks (seeding, import). All or nothing. */
   async saveMany(collection, records) {
     throw new NotImplementedError(`saveMany(${collection})`);
   }
 
-  /** Replace everything with the given snapshot (import / reset). */
+  /** Replace everything with the given snapshot. All or nothing. */
   async replaceAll(snapshot) {
     throw new NotImplementedError('replaceAll');
   }
@@ -90,42 +125,64 @@ export class Repository {
     throw new NotImplementedError('clear');
   }
 
+  // ------------------------------------------------------------ restore points
+  /**
+   * A restore point is a full snapshot taken automatically before a
+   * destructive operation (import, reset, clear). Adapters that cannot store
+   * them report `describe().restorePoints === false` and return an empty list.
+   */
+  async listRestorePoints() {
+    return [];
+  }
+
+  async createRestorePoint() {
+    return null;
+  }
+
+  async getRestorePoint() {
+    return null;
+  }
+
+  async deleteRestorePoint() {
+    return false;
+  }
+
   // ------------------------------------------------------------ named helpers
   listMetrics() { return this.list('metrics'); }
   getMetric(id) { return this.get('metrics', id); }
-  saveMetric(metric, expectedVersion) { return this.save('metrics', metric, expectedVersion); }
-  deleteMetric(id, expectedVersion) { return this.remove('metrics', id, expectedVersion); }
+  saveMetric(metric, expectedToken) { return this.save('metrics', metric, expectedToken); }
+  deleteMetric(id, expectedToken) { return this.remove('metrics', id, expectedToken); }
 
   listBindings() { return this.list('bindings'); }
-  saveBinding(binding, expectedVersion) { return this.save('bindings', binding, expectedVersion); }
-  deleteBinding(id, expectedVersion) { return this.remove('bindings', id, expectedVersion); }
+  saveBinding(binding, expectedToken) { return this.save('bindings', binding, expectedToken); }
+  deleteBinding(id, expectedToken) { return this.remove('bindings', id, expectedToken); }
 
   listStructure() { return this.list('structureNodes'); }
-  saveStructure(node, expectedVersion) { return this.save('structureNodes', node, expectedVersion); }
-  deleteStructure(id, expectedVersion) { return this.remove('structureNodes', id, expectedVersion); }
+  saveStructure(node, expectedToken) { return this.save('structureNodes', node, expectedToken); }
+  deleteStructure(id, expectedToken) { return this.remove('structureNodes', id, expectedToken); }
 
   listMetricStructures() { return this.list('metricStructures'); }
-  saveMetricStructure(link, expectedVersion) { return this.save('metricStructures', link, expectedVersion); }
-  deleteMetricStructure(id, expectedVersion) { return this.remove('metricStructures', id, expectedVersion); }
+  saveMetricStructure(link, expectedToken) { return this.save('metricStructures', link, expectedToken); }
+  deleteMetricStructure(id, expectedToken) { return this.remove('metricStructures', id, expectedToken); }
 
   listDimensions() { return this.list('dimensions'); }
-  saveDimension(dim, expectedVersion) { return this.save('dimensions', dim, expectedVersion); }
-  deleteDimension(id, expectedVersion) { return this.remove('dimensions', id, expectedVersion); }
+  saveDimension(dim, expectedToken) { return this.save('dimensions', dim, expectedToken); }
+  deleteDimension(id, expectedToken) { return this.remove('dimensions', id, expectedToken); }
 
   listDimensionMembers() { return this.list('dimensionMembers'); }
-  saveDimensionMember(member, expectedVersion) { return this.save('dimensionMembers', member, expectedVersion); }
-  deleteDimensionMember(id, expectedVersion) { return this.remove('dimensionMembers', id, expectedVersion); }
+  saveDimensionMember(member, expectedToken) { return this.save('dimensionMembers', member, expectedToken); }
+  deleteDimensionMember(id, expectedToken) { return this.remove('dimensionMembers', id, expectedToken); }
 
   listMetricDimensions() { return this.list('metricDimensions'); }
-  saveMetricDimension(link, expectedVersion) { return this.save('metricDimensions', link, expectedVersion); }
-  deleteMetricDimension(id, expectedVersion) { return this.remove('metricDimensions', id, expectedVersion); }
+  saveMetricDimension(link, expectedToken) { return this.save('metricDimensions', link, expectedToken); }
+  deleteMetricDimension(id, expectedToken) { return this.remove('metricDimensions', id, expectedToken); }
 
   listScenarios() { return this.list('scenarios'); }
-  saveScenario(s, expectedVersion) { return this.save('scenarios', s, expectedVersion); }
+  saveScenario(s, expectedToken) { return this.save('scenarios', s, expectedToken); }
 
   listUnits() { return this.list('units'); }
-  saveUnit(u, expectedVersion) { return this.save('units', u, expectedVersion); }
-  deleteUnit(id, expectedVersion) { return this.remove('units', id, expectedVersion); }
+  saveUnit(u, expectedToken) { return this.save('units', u, expectedToken); }
+  deleteUnit(id, expectedToken) { return this.remove('units', id, expectedToken); }
 }
 
 export function assertCollection(collection) {

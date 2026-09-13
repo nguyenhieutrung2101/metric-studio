@@ -187,12 +187,25 @@ export function extractReferences(text) {
   return parseFormula(text).references;
 }
 
-/** Distinct reference keys (scenario + token) in order of first appearance. */
+/**
+ * Identity of a reference: scenario, metric token and dimension context.
+ * [REVENUE | Product=HRC] and [REVENUE | Product=Car] are two different
+ * inputs to a formula, so they must not collapse into one.
+ */
+export function referenceIdentity(r) {
+  const ctx = (r.dimensionContext || [])
+    .map((p) => `${String(p.dimension || '').trim().toLowerCase()}=${p.member == null ? '' : String(p.member).trim().toLowerCase()}`)
+    .sort()
+    .join(';');
+  return `${r.scenarioCode || ''}:${r.token.toLowerCase()}:${ctx}`;
+}
+
+/** Distinct references in order of first appearance. */
 export function distinctReferences(references) {
   const seen = new Set();
   const out = [];
   for (const r of references) {
-    const key = `${r.scenarioCode || ''}:${r.token.toLowerCase()}`;
+    const key = referenceIdentity(r);
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(r);

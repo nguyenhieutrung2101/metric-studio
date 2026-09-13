@@ -1,7 +1,8 @@
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
-import { NotFoundError } from '../repositories/repository.js';
+import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { referenceKey } from '../utils/text.js';
 import { ValidationFailure } from './metric-service.js';
+import { UnitOfWork, commit } from './unit-of-work.js';
 
 /** DimensionService — dimensions, their member hierarchy and Metric ↔ Dimension links. */
 export class DimensionService {
@@ -31,28 +32,25 @@ export class DimensionService {
     return saved;
   }
 
-  async updateDimension(id, patch, expectedVersion) {
+  async updateDimension(id, patch, expectedToken) {
     const existing = this.store.get('dimensions', id);
     if (!existing) throw new NotFoundError('dimensions', id);
     const merged = createDimension({ ...existing, ...patch, id, createdAt: existing.createdAt, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
     if (this.store.list('dimensions').some((d) => d.id !== id && referenceKey(d.code) === referenceKey(merged.code))) throw new ValidationFailure(`Dimension code "${merged.code}" is already used`, 'code');
-    const saved = await this.repo.saveDimension(merged, expectedVersion == null ? existing.version : expectedVersion);
+    const saved = await this.repo.saveDimension(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('dimensions', saved);
     return saved;
   }
 
-  async deleteDimension(id, expectedVersion) {
+  /** The dimension, its members and its metric links go together. */
+  async deleteDimension(id, expectedToken) {
     const existing = this.store.get('dimensions', id);
     if (!existing) throw new NotFoundError('dimensions', id);
-    await this.repo.deleteDimension(id, expectedVersion == null ? existing.version : expectedVersion);
-    this.store.remove('dimensions', id);
-    const members = this.store.list('dimensionMembers').filter((m) => m.dimensionId === id);
-    const links = this.store.list('metricDimensions').filter((l) => l.dimensionId === id);
-    for (const m of members) await this.repo.deleteDimensionMember(m.id, null).catch(() => {});
-    for (const l of links) await this.repo.deleteMetricDimension(l.id, null).catch(() => {});
-    this.store.removeMany('dimensionMembers', members.map((m) => m.id));
-    this.store.removeMany('metricDimensions', links.map((l) => l.id));
+    const work = new UnitOfWork().remove('dimensions', id, expectedToken == null ? tokenOf(existing) : expectedToken);
+    for (const m of this.selectors.membersByDimension(id)) work.remove('dimensionMembers', m.id, tokenOf(m));
+    for (const l of this.selectors.linksByDimension(id)) work.remove('metricDimensions', l.id, tokenOf(l));
+    await commit(this.repo, this.store, work);
     return true;
   }
 
@@ -91,16 +89,17 @@ export class DimensionService {
     return saved;
   }
 
-  async updateMember(id, patch, expectedVersion) {
+  async updateMember(id, patch, expectedToken) {
     const existing = this.store.get('dimensionMembers', id);
     if (!existing) throw new NotFoundError('dimensionMembers', id);
     const merged = createDimensionMember({ ...existing, ...patch, id, dimensionId: existing.dimensionId, parentId: existing.parentId, level: existing.level, createdAt: existing.createdAt, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
-    const saved = await this.repo.saveDimensionMember(merged, expectedVersion == null ? existing.version : expectedVersion);
+    const saved = await this.repo.saveDimensionMember(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('dimensionMembers', saved);
     return saved;
   }
 
+  /** Re-parenting also re-levels the whole subtree, in the same transaction. */
   async moveMember(id, newParentId) {
     const member = this.store.get('dimensionMembers', id);
     if (!member) throw new NotFoundError('dimensionMembers', id);
@@ -114,35 +113,39 @@ export class DimensionService {
     }
     const siblings = this._memberSiblings(member.dimensionId, parentId, id);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
-    const saved = await this.repo.saveDimensionMember({ ...member, parentId, level, sortOrder }, member.version);
-    this.store.upsert('dimensionMembers', saved);
-    await this._relevel(id);
-    return saved;
+    const work = new UnitOfWork().save('dimensionMembers', { ...member, parentId, level, sortOrder }, tokenOf(member));
+    this._queueRelevel(work, id, level);
+    await commit(this.repo, this.store, work);
+    return this.store.get('dimensionMembers', id);
   }
 
-  async _relevel(rootId) {
+  _queueRelevel(work, rootId, rootLevel) {
     const root = this.store.get('dimensionMembers', rootId);
-    const stack = [root];
+    if (!root) return;
+    const stack = [{ id: rootId, level: rootLevel }];
     while (stack.length) {
       const cur = stack.pop();
-      for (const child of this._memberSiblings(cur.dimensionId, cur.id)) {
-        if (child.level !== cur.level + 1) {
-          const saved = await this.repo.saveDimensionMember({ ...child, level: cur.level + 1 }, child.version);
-          this.store.upsert('dimensionMembers', saved);
-          stack.push(saved);
-        } else stack.push(child);
+      for (const child of this._memberSiblings(root.dimensionId, cur.id)) {
+        const level = cur.level + 1;
+        if (child.level !== level) work.save('dimensionMembers', { ...child, level }, tokenOf(child));
+        stack.push({ id: child.id, level });
       }
     }
   }
 
-  async deleteMember(id, { strategy = 'refuse', expectedVersion = null } = {}) {
+  async deleteMember(id, { strategy = 'refuse', expectedToken = null } = {}) {
     const member = this.store.get('dimensionMembers', id);
     if (!member) throw new NotFoundError('dimensionMembers', id);
     const children = this._memberSiblings(member.dimensionId, id);
     if (children.length && strategy !== 'moveToParent') throw new ValidationFailure(`Member "${member.name}" still has ${children.length} child member(s)`);
-    for (const c of children) await this.moveMember(c.id, member.parentId);
-    await this.repo.deleteDimensionMember(id, expectedVersion == null ? member.version : expectedVersion);
-    this.store.remove('dimensionMembers', id);
+    const work = new UnitOfWork();
+    const parentLevel = member.parentId ? (this.store.get('dimensionMembers', member.parentId) || { level: 0 }).level : 0;
+    for (const child of children) {
+      work.save('dimensionMembers', { ...child, parentId: member.parentId, level: parentLevel + 1 }, tokenOf(child));
+      this._queueRelevel(work, child.id, parentLevel + 1);
+    }
+    work.remove('dimensionMembers', id, expectedToken == null ? tokenOf(member) : expectedToken);
+    await commit(this.repo, this.store, work);
     return true;
   }
 
@@ -157,11 +160,11 @@ export class DimensionService {
     return saved;
   }
 
-  async updateLink(linkId, patch, expectedVersion) {
+  async updateLink(linkId, patch, expectedToken) {
     const existing = this.store.get('metricDimensions', linkId);
     if (!existing) throw new NotFoundError('metricDimensions', linkId);
     const merged = createMetricDimension({ ...existing, ...patch, id: linkId, metricId: existing.metricId, dimensionId: existing.dimensionId, createdAt: existing.createdAt, version: existing.version });
-    const saved = await this.repo.saveMetricDimension(merged, expectedVersion == null ? existing.version : expectedVersion);
+    const saved = await this.repo.saveMetricDimension(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('metricDimensions', saved);
     return saved;
   }
@@ -169,7 +172,7 @@ export class DimensionService {
   async unlink(linkId) {
     const existing = this.store.get('metricDimensions', linkId);
     if (!existing) throw new NotFoundError('metricDimensions', linkId);
-    await this.repo.deleteMetricDimension(linkId, existing.version);
+    await this.repo.deleteMetricDimension(linkId, tokenOf(existing));
     this.store.remove('metricDimensions', linkId);
     return true;
   }

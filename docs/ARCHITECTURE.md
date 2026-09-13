@@ -84,9 +84,9 @@ src/
       store.js                   in-memory normalised state, per-collection revisions
       selectors.js               memoised read models & indexes (tree, coverage, search, reference lookup)
   repositories/
-    repository.js                Repository contract, COLLECTIONS, ConflictError, NotFoundError
-    memory-repository.js         reference implementation (used by tests and as IDB fallback)
-    local-repository.js          IndexedDB adapter (write-through over the memory implementation)
+    repository.js                Repository contract, COLLECTIONS, tokenOf, ConflictError, NotFoundError
+    memory-repository.js         reference implementation: plan → commit → apply, uniqueness, restore points
+    local-repository.js          IndexedDB adapter (one transaction per plan, schema v2)
     sharepoint-repository.js     adapter skeleton: list mapping + ETag→version notes, no logic yet
   services/
     formula-parser.js            text → tokens → AST → references (pure)
@@ -96,7 +96,9 @@ src/
     dimension-service.js         dimension / member / link CRUD
     dependency-service.js        cached edge index, subgraph extraction, cycle detection
     validation-service.js        rule engine → issues (pure)
-    backup-service.js            JSON snapshot export / import
+    snapshot-schema.js           schema boundary: validate, normalise and repair anything coming from outside
+    unit-of-work.js              a set of writes that lands together, mirrored into the store as one change
+    backup-service.js            JSON export, validated import, restore points
     presence-service.js          PresenceService interface + local no-op implementation
   data/
     seed.js                      demo snapshot + large synthetic dataset generator
@@ -140,6 +142,8 @@ optimistic-concurrency token (`expectedVersion`). `createdAt` / `updatedAt`
 are ISO strings.
 
 ```js
+// Every record also carries: version (integer, for humans) and
+// concurrencyToken (opaque, for optimistic concurrency).
 Metric {
   id, code,                 // code: "M.000012" — identification, not an address
   name, aliases: [],        // aliases are also valid formula references
@@ -222,10 +226,81 @@ with a typo still shows what it *tried* to reference.
    Selectors / DependencyService / Validation recompute lazily (memoised on revisions)
 ```
 
-Conflict handling: a save with a stale `expectedVersion` throws
+Conflict handling: a save with a stale concurrency token throws
 `ConflictError { current }`. The drawer shows *Reload* / *Keep editing*; it
 never overwrites. Presence ("Trung is editing Revenue · GD") is a separate
-`PresenceService`; it is UX only and the version check remains the real guard.
+`PresenceService`; it is UX only and the token check remains the real guard.
+
+### 4.1 Integrity rules (v0.2)
+
+Four rules hold at the persistence boundary, and the failure-injection suite
+in `tests/integrity.test.mjs` keeps them honest.
+
+**A write is acknowledged only when it is durable.** Every mutation is
+planned, committed, then applied: the in-memory mirror is updated *after* the
+backing store confirms, never before. A failed write leaves the mirror and
+the database identical.
+
+**Multi-record operations are one transaction.** Services describe a
+`UnitOfWork` and the repository applies it atomically; the IndexedDB adapter
+opens a single transaction across every object store the plan touches. This
+covers cascading deletes (metric plus its bindings, placements and dimension
+links), re-homing a structure node's contents, re-levelling a member subtree,
+and `replaceAll` (clear plus insert). Half a cascade is not a state the app
+can reach. The acknowledged result is pushed into the store with
+`Store.applyChanges`, so no listener observes a half-applied batch either.
+
+**Version and concurrency token are different things.** `version` is the
+domain revision, an integer meant for humans ("you opened v12, the current one
+is v13"). `concurrencyToken` is an opaque value the backend owns: local
+adapters derive it from the version, a SharePoint adapter will put its ETag
+there verbatim. Nothing outside a repository adapter parses it, compares it
+with `<`/`>`, or does arithmetic on it. A record written before tokens
+existed still works, because `tokenOf` falls back to the version.
+
+**Structural uniqueness is enforced where the data lives, not in the UI.**
+One binding per Metric × Scenario, one placement per Metric × Node, one link
+per Metric × Dimension. `UNIQUE_KEYS` in `core/collections.js` is the list a
+SharePoint adapter will mirror with indexed unique columns. Business codes
+are deliberately *not* in that list: a legacy workbook does contain duplicate
+metric codes, and those must arrive and be reported by the warning centre
+rather than blocking the import.
+
+### 4.2 The schema boundary
+
+Everything entering the app from outside goes through `parseSnapshot`, which
+answers three questions:
+
+| Question | Output | Effect |
+| --- | --- | --- |
+| Is the file structurally sound? | `errors` | import refused |
+| What had to be repaired? | `repairs` | applied and reported |
+| What will actually be imported? | `data` | fully normalised records |
+
+Refused outright: invalid JSON, a record without an id, duplicate ids, a
+metric with no name, and a *truncated* file — one where a whole collection is
+missing while another references it (bindings without scenarios, placements
+without groups). That last case is the one that used to be able to empty half
+the database silently.
+
+Repaired and reported: orphan records dropped, duplicate composite keys
+dropped, parent cycles broken, member levels recomputed from real depth,
+dangling unit references cleared, cached formula references reset so they
+re-resolve. Because every record comes out of the model factories, no view
+can meet a field an imported record happened not to have.
+
+Import always replaces, so a file that omits a collection empties it. The
+preview says exactly how many records that would delete, before the
+confirmation dialog.
+
+### 4.3 Restore points
+
+Before every import, reset, clear and restore, the repository writes a full
+snapshot to a separate IndexedDB store (the three most recent are kept).
+Destructive operations are therefore undoable from the Import / Export page,
+and the toast offers *Undo* directly. If a restore point cannot be written,
+the operation still runs — a user whose storage is full needs clearing to
+work — but the UI says plainly that it cannot be undone.
 
 ---
 
@@ -278,4 +353,17 @@ Keyboard: `Esc` closes drawer / menus; `Ctrl/Cmd+S` saves the drawer;
   `file://` contexts) the LocalRepository degrades to memory and the UI
   shows a "not persisted" hint; JSON export still works.
 * **SharePoint.** Not implemented. The adapter file documents the list
-  mapping and the ETag ⇄ version bridge so that Phase 3 replaces one file.
+  mapping so that Phase 3 replaces one file. The two contracts it must
+  satisfy are already in place: `concurrencyToken` is opaque (its ETag drops
+  straight in) and `UNIQUE_KEYS` names the relationships its lists must
+  enforce with indexed unique columns.
+* **Atomicity beyond one backend.** `applyBatch` is all-or-nothing, and an
+  adapter that cannot guarantee that must say so in
+  `describe().atomicBatch === false`. SharePoint REST changesets give a
+  usable equivalent; if they prove insufficient, the honest answer is to
+  report the limitation there rather than to weaken the contract here.
+* **Conflict resolution beyond metrics and bindings.** The drawer diffs and
+  offers an overwrite for those two. For placements and dimension links,
+  which have no local draft, reloading the server record *is* the resolution,
+  so that is all it offers. A generic resolver is deliberately deferred until
+  a real second writer exists to design against.

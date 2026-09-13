@@ -7,7 +7,7 @@ import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
 import { statusChip, severityDot } from '../../ui/components/chip.js';
 import { METRIC_STATUSES, METRIC_ROLES } from '../../core/models/metric.js';
 import { BindingType, BINDING_STATUSES } from '../../core/models/binding.js';
-import { ConflictError } from '../../repositories/repository.js';
+import { ConflictError, tokenOf } from '../../repositories/repository.js';
 import { debounce } from '../../utils/debounce.js';
 import { formatDateTime } from '../../utils/time.js';
 import { worstSeverity } from '../../services/validation-service.js';
@@ -182,7 +182,7 @@ export class MetricDrawer {
         field(t('metric.field.code'), h('input', { class: 'input mono', type: 'text', value: d.code, on: { input: onInput('code') } }), { hint: t('drawer.codeHint') }),
         field(t('metric.field.unit'), h('select', { class: 'input', on: { change: onInput('unitId', (v) => v || null) } }, unitOptions)),
       ),
-      field(t('metric.field.aliases'), h('input', { class: 'input', type: 'text', value: d.aliases.join(', '), placeholder: 'REVENUE, DT', on: { input: onInput('aliases', splitList) } }), { hint: t('drawer.aliasHint') }),
+      field(t('metric.field.aliases'), h('input', { class: 'input', type: 'text', value: (d.aliases || []).join(', '), placeholder: 'REVENUE, DT', on: { input: onInput('aliases', splitList) } }), { hint: t('drawer.aliasHint') }),
       field(t('metric.field.definition'), h('textarea', { class: 'input', rows: 3, value: d.definition, on: { input: onInput('definition') } })),
       h('div', { class: 'field-row' },
         field(t('metric.field.status'), h('select', { class: 'input', on: { change: onInput('status') } }, METRIC_STATUSES.map((s) => h('option', { value: s, text: t(`metric.status.${s}`), selected: s === d.status })))),
@@ -506,7 +506,7 @@ export class MetricDrawer {
     const legacy = bindings.filter((b) => b.legacyCode).map((b) => `${this.ctx.store.get('scenarios', b.scenarioId)?.code}: ${b.legacyCode}`);
     const used = this.ctx.selectors.referencingBindings(m.id);
     body.append(
-      field(t('metric.field.tags'), h('input', { class: 'input', type: 'text', value: this.draft.tags.join(', '), on: { input: (e) => { this.draft.tags = splitList(e.target.value); this._updateDirty(); } } })),
+      field(t('metric.field.tags'), h('input', { class: 'input', type: 'text', value: (this.draft.tags || []).join(', '), on: { input: (e) => { this.draft.tags = splitList(e.target.value); this._updateDirty(); } } })),
       h('dl', { class: 'meta-list' },
         h('dt', { text: t('drawer.meta.id') }), h('dd', { class: 'mono', text: m.id }),
         h('dt', { text: t('drawer.meta.version') }), h('dd', { text: String(m.version) }),
@@ -538,7 +538,7 @@ export class MetricDrawer {
     let savedAny = false;
     try {
       if (!sameMetric(this.draft, pickMetric(this.base))) {
-        const saved = await ctx.services.metrics.update(this.metricId, this.draft, this.base.version);
+        const saved = await ctx.services.metrics.update(this.metricId, this.draft, tokenOf(this.base));
         this.base = saved;
         this.draft = pickMetric(saved);
         savedAny = true;
@@ -583,7 +583,7 @@ export class MetricDrawer {
       this._updateDirty();
       return null;
     }
-    const { binding, resolution } = await this.ctx.services.bindings.setBinding(this.metricId, scenarioId, d, state.base ? state.base.version : null);
+    const { binding, resolution } = await this.ctx.services.bindings.setBinding(this.metricId, scenarioId, d, state.base ? tokenOf(state.base) : null);
     this.bindingDrafts.set(scenarioId, { base: binding, draft: pickBinding(binding), dirty: false, preview: state.preview });
     if (resolution && !silent) {
       const missing = resolution.references.filter((r) => r.status !== 'resolved').length;
@@ -617,7 +617,7 @@ export class MetricDrawer {
     const ok = await confirmDialog({ title: t('drawer.deleteTitle', { name: m.name }), message: used ? t('drawer.deleteMessageUsed', { n: used }) : t('drawer.deleteMessage'), confirmLabel: t('common.delete') });
     if (!ok) return;
     try {
-      await this.ctx.services.metrics.remove(m.id, m.version);
+      await this.ctx.services.metrics.remove(m.id, tokenOf(m));
       this.ctx.toast.success(t('drawer.deleted', { name: m.name }));
       this.drawer.close({ force: true });
     } catch (err) {
@@ -636,6 +636,10 @@ export class MetricDrawer {
   _handleError(err) {
     if (err instanceof ConflictError) {
       this._showConflict(err);
+      return;
+    }
+    if (err && err.name === 'UniquenessError') {
+      this.ctx.toast.error(t('error.duplicateRelationship'));
       return;
     }
     if (err && err.name === 'ValidationFailure') {
@@ -662,12 +666,13 @@ export class MetricDrawer {
         if (theirs !== orig) diffs.push({ field: f, theirs: current[f], mine: this.draft[f], sameAsMine: mine === theirs });
       }
     }
+    const mineVersion = err.collection === 'metrics' ? this.base.version : (this.bindingDrafts.get(this.activeScenarioId) || {}).base?.version;
     box.append(
-      h('div', { class: 'conflict-head' }, icon('warning'), h('strong', { text: t('conflict.title') }), h('span', { text: current ? t('conflict.message', { mine: err.expectedVersion, theirs: current.version }) : t('conflict.deleted') })),
+      h('div', { class: 'conflict-head' }, icon('warning'), h('strong', { text: t('conflict.title') }), h('span', { text: current ? t('conflict.message', { mine: mineVersion == null ? '?' : mineVersion, theirs: current.version }) : t('conflict.deleted') })),
       diffs.length ? h('ul', { class: 'conflict-diffs' }, diffs.map((d) => h('li', null, h('span', { class: 'conflict-field', text: t(`metric.field.${d.field}`) }), h('span', { class: 'conflict-theirs', text: fmt(d.theirs) }), h('span', { class: 'conflict-arrow', text: d.sameAsMine ? '=' : '≠' }), h('span', { class: 'conflict-mine', text: fmt(d.mine) })))) : null,
       h('div', { class: 'conflict-actions' },
         btn(t('conflict.reload'), { kind: 'primary', size: 'sm', on: { click: () => this._reloadFromCurrent(err) } }),
-        current && btn(t('conflict.overwrite'), { kind: 'danger-ghost', size: 'sm', on: { click: () => this._overwrite(err) } }),
+        current && (err.collection === 'metrics' || err.collection === 'bindings') && btn(t('conflict.overwrite'), { kind: 'danger-ghost', size: 'sm', on: { click: () => this._overwrite(err) } }),
         btn(t('conflict.keepEditing'), { size: 'sm', on: { click: () => { box.hidden = true; } } }),
       ),
     );
@@ -680,18 +685,23 @@ export class MetricDrawer {
       this.drawer.close({ force: true });
       return;
     }
+    this.ctx.store.upsert(err.collection, err.current);
     if (err.collection === 'metrics') {
-      this.ctx.store.upsert('metrics', err.current);
       this.base = err.current;
       this.draft = pickMetric(err.current);
       this._refreshHeader();
       this._renderDefinition();
       this._renderAdvanced();
     } else if (err.collection === 'bindings') {
-      this.ctx.store.upsert('bindings', err.current);
       this.bindingDrafts.delete(err.current.scenarioId);
       this._renderBindingTabs();
       this._renderBindingPanel();
+    } else {
+      // Placements, dimension links and structure nodes have no local draft:
+      // taking the server record and re-rendering their section is the whole
+      // resolution.
+      this._renderStructure();
+      this._renderDimensions();
     }
     this._updateDirty();
   }
@@ -701,13 +711,16 @@ export class MetricDrawer {
     try {
       if (err.collection === 'metrics') {
         this.ctx.store.upsert('metrics', err.current);
-        this.base = { ...this.base, version: err.current.version };
+        this.base = { ...this.base, version: err.current.version, concurrencyToken: err.current.concurrencyToken };
         await this.save();
       } else if (err.collection === 'bindings') {
         this.ctx.store.upsert('bindings', err.current);
         const state = this._bindingDraft(err.current.scenarioId);
-        state.base = err.current;
+        state.base = { ...err.current };
         await this.saveBinding(err.current.scenarioId);
+      } else {
+        this.ctx.toast.info(t('conflict.reloadOnly'));
+        this._reloadFromCurrent(err);
       }
     } catch (e) {
       this._handleError(e);

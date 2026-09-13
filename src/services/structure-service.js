@@ -1,11 +1,15 @@
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
-import { NotFoundError } from '../repositories/repository.js';
+import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { ValidationFailure } from './metric-service.js';
+import { UnitOfWork, commit } from './unit-of-work.js';
 
 /**
  * StructureService — the governance hierarchy and metric placements.
+ *
  * Nothing here reads or writes bindings: moving a metric changes only its
- * MetricStructure link (invariant tested in tests/invariants.test.mjs).
+ * MetricStructure link. Operations that touch several records (reordering
+ * siblings, deleting a node and re-homing its contents) go through one unit
+ * of work, so the tree can never be left half-moved.
  */
 export class StructureService {
   constructor({ store, selectors, repo }) {
@@ -45,18 +49,18 @@ export class StructureService {
     return saved;
   }
 
-  async updateNode(id, patch, expectedVersion) {
+  async updateNode(id, patch, expectedToken) {
     const existing = this.store.get('structureNodes', id);
     if (!existing) throw new NotFoundError('structureNodes', id);
     const merged = createStructureNode({ ...existing, ...patch, id, createdAt: existing.createdAt, parentId: existing.parentId, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
-    const saved = await this.repo.saveStructure(merged, expectedVersion == null ? existing.version : expectedVersion);
+    const saved = await this.repo.saveStructure(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('structureNodes', saved);
     return saved;
   }
 
-  renameNode(id, name, expectedVersion) {
-    return this.updateNode(id, { name }, expectedVersion);
+  renameNode(id, name, expectedToken) {
+    return this.updateNode(id, { name }, expectedToken);
   }
 
   /** Move a node under a new parent, optionally at a position among siblings. */
@@ -68,12 +72,14 @@ export class StructureService {
     if (parentId && !this.store.has('structureNodes', parentId)) throw new NotFoundError('structureNodes', parentId);
     const siblings = this._siblings(parentId, id);
     const at = index == null ? siblings.length : Math.max(0, Math.min(index, siblings.length));
-    siblings.splice(at, 0, { ...node, parentId });
-    await this._resequence(siblings, id, parentId);
+    siblings.splice(at, 0, node);
+    const work = new UnitOfWork();
+    this._resequence(work, siblings, id, parentId);
+    await commit(this.repo, this.store, work);
     return this.store.get('structureNodes', id);
   }
 
-  /** Move `id` so that it sits just before/after `siblingId` in the same parent as the sibling. */
+  /** Move `id` so that it sits just before/after `siblingId`. */
   async moveNodeRelative(id, siblingId, position = 'before') {
     const sibling = this.store.get('structureNodes', siblingId);
     if (!sibling) throw new NotFoundError('structureNodes', siblingId);
@@ -93,25 +99,26 @@ export class StructureService {
     return this.moveNode(id, node.parentId, target);
   }
 
-  async _resequence(orderedSiblings, movedId, parentId) {
+  /** Queue the sort order (and new parent for the moved node) of one sibling list. */
+  _resequence(work, orderedSiblings, movedId, parentId) {
     let order = 1;
     for (const s of orderedSiblings) {
       const current = this.store.get('structureNodes', s.id);
+      if (!current) continue;
       const next = { ...current, sortOrder: order, parentId: s.id === movedId ? parentId : current.parentId };
       order += 1;
       if (next.sortOrder !== current.sortOrder || next.parentId !== current.parentId) {
-        const saved = await this.repo.saveStructure(next, current.version);
-        this.store.upsert('structureNodes', saved);
+        work.save('structureNodes', next, tokenOf(current));
       }
     }
   }
 
   /**
-   * Delete a node. Refuses when it still has children or metrics unless
-   * strategy = 'moveToParent', in which case its children and placements are
-   * re-attached to the parent (or become roots / unplaced).
+   * Delete a node. Refused while it still holds anything, unless the caller
+   * asks for its contents to move to the parent. Either way the whole
+   * operation is one transaction.
    */
-  async deleteNode(id, { strategy = 'refuse', expectedVersion = null } = {}) {
+  async deleteNode(id, { strategy = 'refuse', expectedToken = null } = {}) {
     const node = this.store.get('structureNodes', id);
     if (!node) throw new NotFoundError('structureNodes', id);
     const children = this._siblings(id);
@@ -119,24 +126,31 @@ export class StructureService {
     if ((children.length || placements.length) && strategy !== 'moveToParent') {
       throw new ValidationFailure(`Node "${node.name}" still contains ${children.length} sub-node(s) and ${placements.length} metric(s)`);
     }
-    for (const child of children) await this.moveNode(child.id, node.parentId);
-    for (const link of placements) {
-      if (node.parentId) {
-        const exists = this.store.list('metricStructures').some((l) => l.metricId === link.metricId && l.structureNodeId === node.parentId);
-        if (exists) {
-          await this.repo.deleteMetricStructure(link.id, null);
-          this.store.remove('metricStructures', link.id);
-        } else {
-          const saved = await this.repo.saveMetricStructure({ ...link, structureNodeId: node.parentId }, link.version);
-          this.store.upsert('metricStructures', saved);
-        }
-      } else {
-        await this.repo.deleteMetricStructure(link.id, null);
-        this.store.remove('metricStructures', link.id);
+
+    const work = new UnitOfWork();
+    if (children.length) {
+      const targetSiblings = this._siblings(node.parentId, id).concat(children);
+      let order = 1;
+      for (const s of targetSiblings) {
+        const current = this.store.get('structureNodes', s.id);
+        if (!current) continue;
+        const movedHere = children.some((c) => c.id === s.id);
+        const next = { ...current, sortOrder: order, parentId: movedHere ? node.parentId : current.parentId };
+        order += 1;
+        if (next.sortOrder !== current.sortOrder || next.parentId !== current.parentId) work.save('structureNodes', next, tokenOf(current));
       }
     }
-    await this.repo.deleteStructure(id, expectedVersion == null ? node.version : expectedVersion);
-    this.store.remove('structureNodes', id);
+    for (const link of placements) {
+      if (node.parentId) {
+        const alreadyThere = this.store.list('metricStructures').some((l) => l.metricId === link.metricId && l.structureNodeId === node.parentId);
+        if (alreadyThere) work.remove('metricStructures', link.id, tokenOf(link));
+        else work.save('metricStructures', { ...link, structureNodeId: node.parentId }, tokenOf(link));
+      } else {
+        work.remove('metricStructures', link.id, tokenOf(link));
+      }
+    }
+    work.remove('structureNodes', id, expectedToken == null ? tokenOf(node) : expectedToken);
+    await commit(this.repo, this.store, work);
     return true;
   }
 
@@ -148,42 +162,35 @@ export class StructureService {
     const dup = existing.find((l) => l.structureNodeId === structureNodeId);
     if (dup) return dup;
     const primary = isPrimary == null ? existing.length === 0 : isPrimary;
-    if (primary) await this._clearPrimary(metricId);
     const link = createMetricStructure({ metricId, structureNodeId, isPrimary: primary });
-    const saved = await this.repo.saveMetricStructure(link, null);
-    this.store.upsert('metricStructures', saved);
-    return saved;
-  }
-
-  async _clearPrimary(metricId, exceptId = null) {
-    for (const l of this.selectors.placementsByMetric(metricId)) {
-      if (l.isPrimary && l.id !== exceptId) {
-        const saved = await this.repo.saveMetricStructure({ ...l, isPrimary: false }, l.version);
-        this.store.upsert('metricStructures', saved);
-      }
-    }
+    const work = new UnitOfWork();
+    if (primary) for (const l of existing) if (l.isPrimary) work.save('metricStructures', { ...l, isPrimary: false }, tokenOf(l));
+    work.save('metricStructures', link, null);
+    const result = await commit(this.repo, this.store, work);
+    return result.saved.find((s) => s.record.id === link.id).record;
   }
 
   async setPrimary(linkId) {
     const link = this.store.get('metricStructures', linkId);
     if (!link) throw new NotFoundError('metricStructures', linkId);
-    await this._clearPrimary(link.metricId, linkId);
-    const current = this.store.get('metricStructures', linkId);
-    const saved = await this.repo.saveMetricStructure({ ...current, isPrimary: true }, current.version);
-    this.store.upsert('metricStructures', saved);
-    return saved;
+    const work = new UnitOfWork();
+    for (const l of this.selectors.placementsByMetric(link.metricId)) {
+      if (l.id === linkId) continue;
+      if (l.isPrimary) work.save('metricStructures', { ...l, isPrimary: false }, tokenOf(l));
+    }
+    work.save('metricStructures', { ...link, isPrimary: true }, tokenOf(link));
+    await commit(this.repo, this.store, work);
+    return this.store.get('metricStructures', linkId);
   }
 
   async removePlacement(linkId) {
     const link = this.store.get('metricStructures', linkId);
     if (!link) throw new NotFoundError('metricStructures', linkId);
-    await this.repo.deleteMetricStructure(linkId, link.version);
-    this.store.remove('metricStructures', linkId);
-    // Promote another placement to primary so the metric keeps a home.
-    if (link.isPrimary) {
-      const rest = this.selectors.placementsByMetric(link.metricId);
-      if (rest.length) await this.setPrimary(rest[0].id);
-    }
+    const rest = this.selectors.placementsByMetric(link.metricId).filter((l) => l.id !== linkId);
+    const work = new UnitOfWork().remove('metricStructures', linkId, tokenOf(link));
+    // A metric keeps a primary placement as long as it has any placement left.
+    if (link.isPrimary && rest.length) work.save('metricStructures', { ...rest[0], isPrimary: true }, tokenOf(rest[0]));
+    await commit(this.repo, this.store, work);
     return true;
   }
 
@@ -193,11 +200,12 @@ export class StructureService {
     const links = this.selectors.placementsByMetric(metricId);
     const link = links.find((l) => l.structureNodeId === fromNodeId);
     if (!link) return this.placeMetric(metricId, toNodeId);
-    if (links.some((l) => l.structureNodeId === toNodeId)) {
+    const existingAtTarget = links.find((l) => l.structureNodeId === toNodeId);
+    if (existingAtTarget) {
       await this.removePlacement(link.id);
-      return links.find((l) => l.structureNodeId === toNodeId);
+      return this.store.get('metricStructures', existingAtTarget.id);
     }
-    const saved = await this.repo.saveMetricStructure({ ...link, structureNodeId: toNodeId }, link.version);
+    const saved = await this.repo.saveMetricStructure({ ...link, structureNodeId: toNodeId }, tokenOf(link));
     this.store.upsert('metricStructures', saved);
     return saved;
   }

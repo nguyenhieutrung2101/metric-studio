@@ -66,9 +66,28 @@ typo. Ambiguous matches are errors, not guesses.
 * Click the ⚠ badge for the warning center; click an issue to jump to it
 * More ▾ holds Dimensions, Master data (units, scenarios), Import / Export and the language switch (English / Tiếng Việt)
 
-Saves use optimistic concurrency (`expectedVersion`). If a record was changed
-elsewhere, the drawer shows what changed and offers *Reload latest* or an
-explicit *Overwrite*; nothing is overwritten silently.
+Saves use optimistic concurrency. If a record was changed elsewhere, the
+drawer shows what changed and offers *Reload latest* or an explicit
+*Overwrite*; nothing is overwritten silently.
+
+## Your data is hard to lose
+
+* **Every multi-record operation is one transaction.** Deleting a metric takes
+  its bindings, placements and dimension links with it, or changes nothing at
+  all. The same holds for deleting a structure group, a dimension, and for
+  import.
+* **Imports are validated before anything is touched.** A file missing a whole
+  collection that its own records reference is refused. Orphans, duplicates
+  and broken hierarchies inside an otherwise sound file are repaired, and the
+  preview lists exactly what was repaired and what the import would delete.
+* **Destructive actions are undoable.** A restore point is written before every
+  import, reset and clear; the three most recent are kept and restoring is
+  itself undoable. If one cannot be written, the app says so instead of
+  pretending.
+* **Structural duplicates are impossible.** A metric cannot get two bindings
+  for the same scenario, two placements in one group, or two links to one
+  dimension. Duplicate business codes are allowed in and reported as findings,
+  because legacy workbooks contain them.
 
 ## Deploy (Cloudflare Workers)
 
@@ -107,7 +126,7 @@ _headers              response headers for the published site
 css/                  tokens, shell layout, components
 src/core/             models, store, selectors
 src/repositories/     contract + Memory / IndexedDB adapters, SharePoint skeleton
-src/services/         formula parser, dependency graph, validation, CRUD services, backup
+src/services/         formula parser, dependency graph, validation, schema boundary, unit of work, CRUD services, backup
 src/features/         metric-master, bindings, dependency, dimensions, master-data, import-export, warnings
 src/ui/               dom helpers, i18n, router, drawer, virtual list, tree, graph, toast, components
 src/data/seed.js      demo catalogue + large synthetic dataset
@@ -124,5 +143,10 @@ docs/ARCHITECTURE.md  architecture and decisions
   (Bảng 1 → structure, Bảng 2.1 / 2.2 → TT / GD candidates, Giá trị chiều →
   dimensions, DIMxx columns → links), dimension hierarchy improvements, richer
   formula syntax, report usage.
-* **Phase 3:** SharePointRepository (list per collection, ETag ⇄ version),
+* **Phase 3:** SharePointRepository (list per collection, ETag as the
+  concurrency token, unique indexed columns for the structural keys),
   presence, SPFx packaging.
+
+Integrity and concurrency hardening (v0.2) is done: transactional writes,
+schema-validated import, restore points, uniqueness at the persistence
+boundary, and a failure-injection test suite.

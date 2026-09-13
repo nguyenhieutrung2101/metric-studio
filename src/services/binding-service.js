@@ -1,5 +1,5 @@
 import { createBinding, BindingType } from '../core/models/binding.js';
-import { NotFoundError } from '../repositories/repository.js';
+import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { parseFormula, distinctReferences } from './formula-parser.js';
 import { ValidationFailure } from './metric-service.js';
 
@@ -60,7 +60,7 @@ export class BindingService {
     return resolveFormula(formulaText, scenarioId, this.selectors, this.store);
   }
 
-  async setBinding(metricId, scenarioId, input, expectedVersion) {
+  async setBinding(metricId, scenarioId, input, expectedToken) {
     if (!this.store.has('metrics', metricId)) throw new NotFoundError('metrics', metricId);
     if (!this.store.has('scenarios', scenarioId)) throw new NotFoundError('scenarios', scenarioId);
     const existing = this.selectors.bindingFor(metricId, scenarioId);
@@ -74,7 +74,7 @@ export class BindingService {
       binding.parsedReferences = [];
       binding.formulaErrors = [];
     }
-    const saved = await this.repo.saveBinding(binding, existing ? (expectedVersion == null ? existing.version : expectedVersion) : null);
+    const saved = await this.repo.saveBinding(binding, existing ? (expectedToken == null ? tokenOf(existing) : expectedToken) : null);
     this.store.upsert('bindings', saved);
     return { binding: saved, resolution };
   }
@@ -84,13 +84,13 @@ export class BindingService {
     const b = this.store.get('bindings', bindingId);
     if (!b) throw new NotFoundError('bindings', bindingId);
     if (b.type !== BindingType.FORMULA) return { binding: b, resolution: null };
-    return this.setBinding(b.metricId, b.scenarioId, { formulaText: b.formulaText, type: b.type }, b.version);
+    return this.setBinding(b.metricId, b.scenarioId, { formulaText: b.formulaText, type: b.type }, tokenOf(b));
   }
 
-  async removeBinding(metricId, scenarioId, expectedVersion) {
+  async removeBinding(metricId, scenarioId, expectedToken) {
     const existing = this.selectors.bindingFor(metricId, scenarioId);
     if (!existing) return false;
-    await this.repo.deleteBinding(existing.id, expectedVersion == null ? existing.version : expectedVersion);
+    await this.repo.deleteBinding(existing.id, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.remove('bindings', existing.id);
     return true;
   }

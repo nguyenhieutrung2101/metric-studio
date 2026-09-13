@@ -103,7 +103,7 @@ export function mountDimensionsView(container, ctx) {
     openMenu(anchor, [
       { label: t('dims.addChild'), icon: 'plus', onClick: () => addMember(member.dimensionId, member.id) },
       { label: t('common.rename'), icon: 'edit', onClick: async () => {
-        const v = await promptDialog({ title: t('common.rename'), fields: [{ name: 'name', label: t('metric.field.name'), value: member.name }, { name: 'code', label: t('metric.field.code'), value: member.code }, { name: 'aliases', label: t('metric.field.aliases'), value: member.aliases.join(', ') }] });
+        const v = await promptDialog({ title: t('common.rename'), fields: [{ name: 'name', label: t('metric.field.name'), value: member.name }, { name: 'code', label: t('metric.field.code'), value: member.code }, { name: 'aliases', label: t('metric.field.aliases'), value: (member.aliases || []).join(', ') }] });
         if (!v) return;
         try { await services.dimensions.updateMember(member.id, v); } catch (err) { ctx.toast.error(err.message); }
       } },

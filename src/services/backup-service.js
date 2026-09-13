@@ -1,8 +1,14 @@
 import { COLLECTIONS, SCHEMA_VERSION } from '../core/collections.js';
+import { parseSnapshot, APP_ID } from './snapshot-schema.js';
 
-const APP_ID = 'metric-studio';
-
-/** JSON backup: export the whole store, validate and import a file. */
+/**
+ * BackupService — JSON export, validated import, and the restore points that
+ * make every destructive operation reversible.
+ *
+ * No snapshot reaches the repository without passing `parseSnapshot` first,
+ * and no replace happens without a restore point being written first (when
+ * the repository supports them), so a bad import is always undoable.
+ */
 export class BackupService {
   constructor({ store, repo }) {
     this.store = store;
@@ -17,45 +23,103 @@ export class BackupService {
     return JSON.stringify(this.exportSnapshot(), null, pretty ? 2 : 0);
   }
 
+  /** Validate and normalise without touching anything. */
   static inspect(json) {
-    let payload = json;
-    if (typeof json === 'string') {
-      try {
-        payload = JSON.parse(json);
-      } catch (err) {
-        return { ok: false, errors: [`Invalid JSON: ${err.message}`], counts: {} };
-      }
-    }
-    const errors = [];
-    if (!payload || typeof payload !== 'object') return { ok: false, errors: ['Backup must be a JSON object'], counts: {} };
-    // Accept either the wrapped form { app, data } or a bare snapshot.
-    const data = payload.data && typeof payload.data === 'object' ? payload.data : payload;
-    if (payload.app && payload.app !== APP_ID) errors.push(`Unexpected app id "${payload.app}"`);
-    if (payload.schemaVersion && payload.schemaVersion > SCHEMA_VERSION) errors.push(`Schema version ${payload.schemaVersion} is newer than this app supports (${SCHEMA_VERSION})`);
-    const counts = {};
-    for (const c of COLLECTIONS) {
-      const arr = data[c];
-      if (arr == null) {
-        counts[c] = 0;
-        continue;
-      }
-      if (!Array.isArray(arr)) {
-        errors.push(`"${c}" must be an array`);
-        continue;
-      }
-      const bad = arr.filter((r) => !r || typeof r !== 'object' || !r.id).length;
-      if (bad) errors.push(`"${c}" has ${bad} record(s) without an id`);
-      counts[c] = arr.length;
-    }
-    if (!COLLECTIONS.some((c) => counts[c] > 0)) errors.push('Backup contains no records');
-    return { ok: errors.length === 0, errors, counts, data };
+    return parseSnapshot(json);
   }
 
-  async importSnapshot(json) {
-    const check = BackupService.inspect(json);
-    if (!check.ok) throw new Error(check.errors.join('; '));
-    const saved = await this.repo.replaceAll(check.data);
-    this.store.hydrate(saved);
-    return check.counts;
+  /**
+   * What an import would do, including what it would delete. Import always
+   * replaces, so a file that omits a collection empties it; the caller must
+   * show that before asking for confirmation.
+   */
+  preview(json) {
+    const parsed = parseSnapshot(json);
+    const willDelete = {};
+    let deleteTotal = 0;
+    for (const c of COLLECTIONS) {
+      const current = this.store.count(c);
+      const incoming = parsed.ok ? parsed.counts[c] : 0;
+      const lost = parsed.ok && incoming === 0 && current > 0 ? current : 0;
+      willDelete[c] = lost;
+      deleteTotal += lost;
+    }
+    return { ...parsed, willDelete, deleteTotal };
   }
+
+  /**
+   * Replace everything with a validated snapshot.
+   * @returns {Promise<{counts, repairs, restorePoint}>}
+   */
+  async importSnapshot(json, { label = 'Before import' } = {}) {
+    const parsed = json && json.ok === true && json.data ? json : parseSnapshot(json);
+    if (!parsed.ok) throw new Error(parsed.errors.join('; '));
+    const { point, error } = await this._createRestorePoint(label);
+    const saved = await this.repo.replaceAll(parsed.data);
+    this.store.hydrate(saved);
+    return { counts: parsed.counts, repairs: parsed.repairs, restorePoint: point, restorePointError: error };
+  }
+
+  /** Same path as an import, for the built-in datasets and for clearing. */
+  async replaceWith(snapshot, { label = 'Before replace' } = {}) {
+    const isEmpty = !COLLECTIONS.some((c) => (snapshot[c] || []).length > 0);
+    const parsed = isEmpty ? null : parseSnapshot(snapshot);
+    if (parsed && !parsed.ok) throw new Error(parsed.errors.join('; '));
+    // Validate before taking the restore point: a bad snapshot must not even
+    // cost the user a slot.
+    const { point, error } = await this._createRestorePoint(label);
+    if (isEmpty) {
+      await this.repo.clear();
+      this.store.hydrate({});
+      return { counts: emptyCounts(), repairs: [], restorePoint: point, restorePointError: error };
+    }
+    const saved = await this.repo.replaceAll(parsed.data);
+    this.store.hydrate(saved);
+    return { counts: parsed.counts, repairs: parsed.repairs, restorePoint: point, restorePointError: error };
+  }
+
+  // ------------------------------------------------------------ restore points
+  supportsRestorePoints() {
+    return this.repo.describe().restorePoints === true;
+  }
+
+  listRestorePoints() {
+    return this.repo.listRestorePoints();
+  }
+
+  /**
+   * A restore point is a safety net, not the operation itself. Failing to
+   * take one must not trap a user whose storage is full (clearing data is
+   * their way out), but it must never pass unnoticed either: the caller gets
+   * the error back and the UI says the operation cannot be undone.
+   */
+  async _createRestorePoint(label) {
+    if (!this.supportsRestorePoints()) return { point: null, error: null };
+    try {
+      return { point: await this.repo.createRestorePoint(label), error: null };
+    } catch (err) {
+      return { point: null, error: err };
+    }
+  }
+
+  async restore(id) {
+    const point = await this.repo.getRestorePoint(id);
+    if (!point) throw new Error('Restore point not found');
+    const parsed = parseSnapshot(point.data);
+    if (!parsed.ok) throw new Error(parsed.errors.join('; '));
+    await this._createRestorePoint('Before restore');
+    const saved = await this.repo.replaceAll(parsed.data);
+    this.store.hydrate(saved);
+    return { counts: parsed.counts, repairs: parsed.repairs };
+  }
+
+  deleteRestorePoint(id) {
+    return this.repo.deleteRestorePoint(id);
+  }
+}
+
+function emptyCounts() {
+  const out = {};
+  for (const c of COLLECTIONS) out[c] = 0;
+  return out;
 }

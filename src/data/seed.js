@@ -259,14 +259,14 @@ export function resolveSeedBindings(snapshot, rawBindings) {
   const store = new Store();
   store.hydrate(snapshot);
   const selectors = createSelectors(store);
-  return rawBindings.map((b, i) => {
+  return rawBindings.map((b) => {
     const binding = createBinding({ ...b, id: b.id || `b-${b.metricId}-${b.scenarioId}` });
     if (binding.type === BindingType.FORMULA) {
       const res = resolveFormula(binding.formulaText, binding.scenarioId, selectors, store);
       binding.parsedReferences = res.references.map(({ raw, token, scenarioCode, dimensionContext, metricId, scenarioId, status }) => ({ raw, token, scenarioCode, dimensionContext, metricId, scenarioId, status }));
       binding.formulaErrors = res.errors.map((e) => ({ message: e.message, position: e.position }));
     }
-    return stamp({ ...binding, sortOrder: i });
+    return stamp(binding);
   });
 }
 

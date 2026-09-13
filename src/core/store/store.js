@@ -111,6 +111,37 @@ export class Store {
     return removed;
   }
 
+  /**
+   * Apply a whole batch at once: every collection is mutated before the first
+   * event fires, so no listener can observe a half-applied cascade.
+   * @param {{upserts?: Object<string, object[]>, removals?: Object<string, string[]>}} changes
+   */
+  applyChanges({ upserts = {}, removals = {} } = {}) {
+    const touched = new Map();
+    for (const [collection, records] of Object.entries(upserts)) {
+      this._assertCollection(collection);
+      const ids = [];
+      for (const record of records || []) {
+        if (!record || !record.id) continue;
+        this.data[collection].set(record.id, record);
+        ids.push(record.id);
+      }
+      if (ids.length) touched.set(collection, { type: 'upsert', ids });
+    }
+    for (const [collection, list] of Object.entries(removals)) {
+      this._assertCollection(collection);
+      const ids = [];
+      for (const id of list || []) if (this.data[collection].delete(id)) ids.push(id);
+      if (ids.length) {
+        const prev = touched.get(collection);
+        touched.set(collection, { type: prev ? 'mixed' : 'remove', ids: prev ? [...prev.ids, ...ids] : ids });
+      }
+    }
+    for (const collection of touched.keys()) this._touch(collection);
+    for (const [collection, evt] of touched) this.events.emit('change', { collection, type: evt.type, ids: evt.ids });
+    return touched.size;
+  }
+
   /** Plain-object snapshot (arrays per collection), safe to serialise. */
   snapshot() {
     const out = {};

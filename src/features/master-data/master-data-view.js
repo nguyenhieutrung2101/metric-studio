@@ -2,6 +2,7 @@ import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
 import { createUnit } from '../../core/models/unit.js';
+import { tokenOf } from '../../repositories/repository.js';
 import { debounce } from '../../utils/debounce.js';
 
 /** Master data — units and scenarios. Small tables, no drama. */
@@ -47,7 +48,7 @@ export function mountMasterDataView(container, ctx) {
           h('td', { class: 'actions' }, btn('', { icon: 'edit', size: 'sm', title: t('common.rename'), on: { click: async () => {
             const v = await promptDialog({ title: t('common.rename'), fields: [{ name: 'name', label: t('mm.col.name'), value: s.name }] });
             if (!v || !v.name) return;
-            try { const saved = await repo.saveScenario({ ...s, name: v.name }, s.version); store.upsert('scenarios', saved); } catch (err) { ctx.toast.error(err.message); }
+            try { const saved = await repo.saveScenario({ ...s, name: v.name }, tokenOf(s)); store.upsert('scenarios', saved); } catch (err) { ctx.toast.error(err.message); }
           } } })),
         ))),
       ),
@@ -59,7 +60,7 @@ export function mountMasterDataView(container, ctx) {
     if (!v || !v.code) return;
     try {
       const rec = u ? { ...u, ...v } : createUnit(v);
-      const saved = await repo.saveUnit(rec, u ? u.version : null);
+      const saved = await repo.saveUnit(rec, u ? tokenOf(u) : null);
       store.upsert('units', saved);
     } catch (err) { ctx.toast.error(err.message); }
   }
@@ -68,7 +69,7 @@ export function mountMasterDataView(container, ctx) {
     const n = usage(u.id);
     const ok = await confirmDialog({ title: t('master.deleteUnitTitle', { code: u.code }), message: n ? t('master.deleteUnitUsed', { n }) : '', confirmLabel: t('common.delete') });
     if (!ok) return;
-    try { await repo.deleteUnit(u.id, u.version); store.remove('units', u.id); } catch (err) { ctx.toast.error(err.message); }
+    try { await repo.deleteUnit(u.id, tokenOf(u)); store.remove('units', u.id); } catch (err) { ctx.toast.error(err.message); }
   }
 
   const schedule = debounce(() => { renderUnits(); renderScenarios(); }, 30);

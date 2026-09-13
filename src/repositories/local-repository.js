@@ -2,12 +2,17 @@ import { COLLECTIONS } from './repository.js';
 import { MemoryRepository } from './memory-repository.js';
 
 const DB_NAME = 'metric-studio';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+const RESTORE_STORE = '_restorePoints';
 
 /**
- * Browser-local persistence: an in-memory mirror (inherited) with write-through
- * to IndexedDB. Reads are served from memory; every acknowledged write is
- * committed to IndexedDB before the memory mirror is updated.
+ * Browser-local persistence: the in-memory mirror inherited from
+ * MemoryRepository, made durable in IndexedDB.
+ *
+ * Every plan is committed inside ONE IndexedDB transaction spanning all the
+ * object stores it touches, so a failure halfway through an import or a
+ * cascading delete leaves the database exactly as it was. The memory mirror
+ * is only updated once that transaction completes.
  *
  * When IndexedDB is unavailable (private mode, some file:// contexts) the
  * repository keeps working in memory and reports persistent=false so the UI
@@ -24,7 +29,13 @@ export class LocalRepository extends MemoryRepository {
   }
 
   describe() {
-    return { persistent: this._persistent, kind: this._persistent ? 'indexeddb' : 'memory', detail: this._error ? String(this._error.message || this._error) : '' };
+    return {
+      persistent: this._persistent,
+      kind: this._persistent ? 'indexeddb' : 'memory',
+      atomicBatch: true,
+      restorePoints: true,
+      detail: this._error ? String(this._error.message || this._error) : '',
+    };
   }
 
   async init() {
@@ -38,6 +49,12 @@ export class LocalRepository extends MemoryRepository {
         map.clear();
         for (const r of rows) if (r && r.id) map.set(r.id, r);
       }
+      const points = await idbRequest(this._db.transaction(RESTORE_STORE, 'readonly').objectStore(RESTORE_STORE).getAll());
+      for (const p of points) {
+        if (!p || !p.id) continue;
+        this._restorePoints.set(p.id, p);
+        this._restoreSeq = Math.max(this._restoreSeq, p.seq || 0);
+      }
     } catch (err) {
       this._error = err;
       this._db = null;
@@ -46,32 +63,33 @@ export class LocalRepository extends MemoryRepository {
     return this;
   }
 
-  async _persist(collection, record) {
+  /** One transaction for the whole plan: all of it lands, or none of it does. */
+  async _commit(plan) {
     if (!this._db) return;
-    const tx = this._db.transaction(collection, 'readwrite');
-    tx.objectStore(collection).put(record);
+    const { clearAll = false, puts = [], deletes = [] } = plan;
+    const touched = new Set();
+    if (clearAll) for (const c of COLLECTIONS) touched.add(c);
+    for (const p of puts) touched.add(p.collection);
+    for (const d of deletes) touched.add(d.collection);
+    if (touched.size === 0) return;
+    const tx = this._db.transaction([...touched], 'readwrite');
+    if (clearAll) for (const c of COLLECTIONS) tx.objectStore(c).clear();
+    for (const p of puts) tx.objectStore(p.collection).put(p.record);
+    for (const d of deletes) tx.objectStore(d.collection).delete(d.id);
     await txDone(tx);
   }
 
-  async _persistMany(collection, records) {
-    if (!this._db || records.length === 0) return;
-    const tx = this._db.transaction(collection, 'readwrite');
-    const store = tx.objectStore(collection);
-    for (const r of records) store.put(r);
+  async _commitRestorePoint(point) {
+    if (!this._db) return;
+    const tx = this._db.transaction(RESTORE_STORE, 'readwrite');
+    tx.objectStore(RESTORE_STORE).put(point);
     await txDone(tx);
   }
 
-  async _delete(collection, id) {
+  async _deleteRestorePoint(id) {
     if (!this._db) return;
-    const tx = this._db.transaction(collection, 'readwrite');
-    tx.objectStore(collection).delete(id);
-    await txDone(tx);
-  }
-
-  async _clearAll() {
-    if (!this._db) return;
-    const tx = this._db.transaction([...COLLECTIONS], 'readwrite');
-    for (const c of COLLECTIONS) tx.objectStore(c).clear();
+    const tx = this._db.transaction(RESTORE_STORE, 'readwrite');
+    tx.objectStore(RESTORE_STORE).delete(id);
     await txDone(tx);
   }
 
@@ -95,6 +113,7 @@ function openDatabase(idb, name, version) {
       for (const c of COLLECTIONS) {
         if (!db.objectStoreNames.contains(c)) db.createObjectStore(c, { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains(RESTORE_STORE)) db.createObjectStore(RESTORE_STORE, { keyPath: 'id' });
     };
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error('IndexedDB open failed'));
