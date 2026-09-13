@@ -7,6 +7,7 @@ import { Store } from '../src/core/store/store.js';
 import { createSelectors } from '../src/core/store/selectors.js';
 import { BackupService } from '../src/services/backup-service.js';
 import { parseSnapshot } from '../src/services/snapshot-schema.js';
+import { validateAll } from '../src/services/validation-service.js';
 import { MetricService } from '../src/services/metric-service.js';
 import { StructureService } from '../src/services/structure-service.js';
 import { DimensionService } from '../src/services/dimension-service.js';
@@ -377,4 +378,137 @@ test('every collection survives an export, import and reload cycle', async () =>
   for (const c of COLLECTIONS) {
     assert.equal(reloaded[c].length, ctx.store.count(c), `${c} is durable, not just in memory`);
   }
+});
+
+// ================================================================ v0.2.1 group 1
+// Accuracy of the destructive-import warning, the schema boundary having no
+// back door, one definition of reference identity, and the ordering rules a
+// non-transactional backend will depend on.
+
+test('the import preview counts deletions by id, not by collection size', async () => {
+  const ctx = await createContext();
+  const full = buildDemoSnapshot();
+  // A smaller file: the collection stays non-empty, so counting sizes would
+  // have reported nothing at all.
+  const smaller = { ...full, metrics: full.metrics.slice(0, 5), bindings: [], metricStructures: [], metricDimensions: [] };
+  const preview = ctx.backup.preview(smaller);
+  assert.equal(preview.ok, true);
+  assert.equal(preview.willDelete.metrics, ctx.store.count('metrics') - 5, 'every metric absent from the file is counted');
+  assert.equal(preview.willUpdate.metrics, 5);
+  assert.equal(preview.willAdd.metrics, 0);
+  assert.ok(preview.deleteTotal >= preview.willDelete.metrics);
+});
+
+test('the preview also reports what the file adds and updates', async () => {
+  const ctx = await createContext();
+  const full = buildDemoSnapshot();
+  const withExtra = { ...full, metrics: [...full.metrics, { id: 'brand-new', code: 'M.900001', name: 'Chỉ tiêu mới' }] };
+  const preview = ctx.backup.preview(withExtra);
+  assert.equal(preview.willAdd.metrics, 1);
+  assert.equal(preview.willDelete.metrics, 0);
+  assert.equal(preview.willUpdate.metrics, ctx.store.count('metrics'));
+});
+
+test('an identical file reports no change at all', async () => {
+  const ctx = await createContext();
+  const preview = ctx.backup.preview(ctx.backup.exportJson());
+  assert.equal(preview.deleteTotal, 0);
+  assert.equal(preview.addTotal, 0);
+  assert.ok(preview.updateTotal > 0);
+});
+
+test('importSnapshot re-parses even a caller-supplied "already parsed" object', async () => {
+  const ctx = await createContext({ seed: false });
+  const forged = { ok: true, errors: [], repairs: [], counts: {}, data: { metrics: [{ id: 'x', name: '' }] } };
+  await assert.rejects(() => ctx.backup.importSnapshot(forged), /has no name/);
+  assert.equal(ctx.store.count('metrics'), 0, 'nothing malformed reached the store');
+});
+
+test('parsing is idempotent, so re-parsing a preview result costs nothing in fidelity', () => {
+  const once = parseSnapshot(buildDemoSnapshot());
+  const twice = parseSnapshot(once.data);
+  assert.equal(twice.ok, true);
+  assert.deepEqual(twice.repairs, [], 'a normalised snapshot needs no further repair');
+  assert.equal(JSON.stringify(twice.data), JSON.stringify(once.data));
+});
+
+test('reference identity agrees with how references resolve to metrics', async () => {
+  const ctx = await createContext();
+  const preview = ctx.bindings.preview('[Doanh thu] + [DOANH THU] + [doanh  thu]', TT);
+  assert.equal(preview.references.length, 1, 'three spellings of one metric are one reference');
+  assert.equal(preview.references[0].metricId, 'm-revenue');
+});
+
+test('validation walks every distinct dimension slice of a reference', async () => {
+  const ctx = await createContext();
+  await ctx.bindings.setBinding('m-occupancy', GD, { type: 'formula', formulaText: '[COMPLAINTS | Product=A] + [COMPLAINTS | Product=B]' });
+  const issues = validateAll({ store: ctx.store, selectors: ctx.selectors, dependencies: ctx.dependencies })
+    .filter((i) => i.code === 'BINDING_REF_TARGET_UNBOUND' && i.metricId === 'm-occupancy');
+  assert.equal(issues.length, 2, 'both slices are reported, not just the first');
+});
+
+test('the graph keeps one edge per metric and lists every slice on it', async () => {
+  const ctx = await createContext();
+  await ctx.bindings.setBinding('m-occupancy', GD, { type: 'formula', formulaText: '[ROOM_NIGHTS_SOLD | Entity=GSM-VN] + [ROOM_NIGHTS_SOLD | Entity=GSM-LA] + [ROOMS]' });
+  const out = ctx.dependencies.edgesFrom(`m-occupancy|${GD}`);
+  assert.equal(out.length, 2, 'two target metrics, two edges');
+  const sold = out.find((e) => e.targetMetricId === 'm-room-nights-sold');
+  assert.equal(sold.dimensionContexts.length, 2, 'both slices are carried on the edge');
+  assert.deepEqual(sold.dimensionContexts.map((c) => c[0].member), ['GSM-VN', 'GSM-LA']);
+  const rooms = out.find((e) => e.targetMetricId === 'm-rooms');
+  assert.deepEqual(rooms.dimensionContexts, [], 'a reference without a slice carries none');
+});
+
+test('a cascade queues dependent records before the record they depend on', async () => {
+  const ctx = await createContext();
+  const seen = [];
+  const original = ctx.repo.applyBatch.bind(ctx.repo);
+  ctx.repo.applyBatch = async (ops) => {
+    seen.push(...ops.map((o) => `${o.op}:${o.collection}`));
+    return original(ops);
+  };
+  await ctx.metrics.remove('m-revenue');
+  assert.equal(seen[seen.length - 1], 'remove:metrics', 'the metric goes last');
+  assert.ok(seen.slice(0, -1).every((s) => s !== 'remove:metrics'));
+  assert.ok(seen.includes('remove:bindings') && seen.includes('remove:metricStructures'));
+});
+
+test('a dimension delete queues its members and links before the dimension', async () => {
+  const ctx = await createContext();
+  const seen = [];
+  const original = ctx.repo.applyBatch.bind(ctx.repo);
+  ctx.repo.applyBatch = async (ops) => {
+    seen.push(...ops.map((o) => `${o.op}:${o.collection}`));
+    return original(ops);
+  };
+  await ctx.dimensions.deleteDimension('d-product');
+  assert.equal(seen[seen.length - 1], 'remove:dimensions');
+});
+
+test('replaying a partly applied cascade succeeds instead of failing on what is already gone', async () => {
+  const ctx = await createContext();
+  const binding = ctx.selectors.bindingFor('m-revenue', TT);
+  // Somebody else already removed one of the children.
+  await ctx.repo.deleteBinding(binding.id, tokenOf(binding));
+  ctx.store.remove('bindings', binding.id);
+  await ctx.metrics.remove('m-revenue');
+  assert.equal(ctx.store.get('metrics', 'm-revenue'), null, 'the cascade completed regardless');
+});
+
+test('a non-optional removal of a missing record is still an error', async () => {
+  const ctx = await createContext();
+  await assert.rejects(() => ctx.repo.applyBatch([{ op: 'remove', collection: 'metrics', id: 'does-not-exist' }]), { name: 'NotFoundError' });
+});
+
+test('the batch plan carries the caller order for adapters that cannot be atomic', async () => {
+  const ctx = await createContext();
+  let plan = null;
+  ctx.repo._commit = async (p) => { plan = p; };
+  const placement = ctx.selectors.placementsByMetric('m-revenue')[0];
+  const binding = ctx.selectors.bindingFor('m-revenue', TT);
+  await ctx.repo.applyBatch([
+    { op: 'remove', collection: 'metricStructures', id: placement.id, expectedToken: tokenOf(placement) },
+    { op: 'save', collection: 'bindings', record: { ...binding, note: 'x' }, expectedToken: tokenOf(binding) },
+  ]);
+  assert.deepEqual(plan.ops.map((o) => `${o.kind}:${o.collection}`), ['delete:metricStructures', 'put:bindings'], 'order preserved');
 });

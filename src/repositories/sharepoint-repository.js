@@ -18,11 +18,32 @@ import { Repository, NotImplementedError, COLLECTIONS } from './repository.js';
  *   metricDimensions  MS_MetricDimensions
  *   units             MS_Units
  *
- * Concurrency: SharePoint returns an ETag ("odata.etag") on every item; the
- * adapter exposes it as `version` and sends `If-Match: <etag>` on update. A
- * 412 Precondition Failed maps to ConflictError with the freshly fetched
- * current item. `id` is stored in a dedicated indexed text column (StableId)
- * so the immutable app id never depends on SharePoint's numeric item Id.
+ * Concurrency: SharePoint returns an ETag ("odata.etag") on every item. The
+ * adapter puts it in `concurrencyToken` verbatim and sends `If-Match: <etag>`
+ * on update; `version` stays the app's own human-readable revision counter
+ * and is never derived from the ETag. A 412 Precondition Failed maps to
+ * ConflictError with the freshly fetched current item. `id` is stored in a
+ * dedicated indexed text column (StableId) so the immutable app id never
+ * depends on SharePoint's numeric item Id.
+ *
+ * Uniqueness: the relationships in `UNIQUE_KEYS` must be enforced by the
+ * list itself, with a calculated column holding the composite key and the
+ * "enforce unique values" setting on its index. Client-side checks do not
+ * survive twenty concurrent users. Business codes are deliberately not
+ * enforced there: legacy workbooks contain duplicates that must arrive and be
+ * reported.
+ *
+ * Write consistency: SharePoint does NOT roll back a failed multi-item
+ * request, and our cascades span four different lists, where cross-list
+ * atomicity was never on offer in the first place. This adapter must
+ * therefore report `describe().atomicBatch === false` and apply `plan.ops` in
+ * the order given. Services already queue dependent records before the record
+ * they depend on, and mark those removals optional, so a partial failure
+ * leaves a retryable state rather than orphan records; whatever does slip
+ * through is caught by the existing orphan rules in the validation service.
+ * `replaceAll` must not be ported as-is: a full import against SharePoint has
+ * to become an incremental reconcile (diff, upsert, delete) with a JSON
+ * export as the safety net instead of a restore point.
  *
  * This class deliberately contains no fetch logic yet; it exists so that
  * app.js can swap `new LocalRepository()` for `new SharePointRepository(cfg)`

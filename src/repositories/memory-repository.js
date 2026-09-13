@@ -57,14 +57,14 @@ export class MemoryRepository extends Repository {
   // ------------------------------------------------------------ single writes
   async save(collection, record, expectedToken) {
     const plan = this._planSave(collection, record, expectedToken);
-    await this._commit({ puts: [plan] });
+    await this._commit({ puts: [plan], ops: [{ kind: 'put', ...plan }] });
     this._data[collection].set(plan.record.id, plan.record);
     return clone(plan.record);
   }
 
   async remove(collection, id, expectedToken) {
     const plan = this._planRemove(collection, id, expectedToken);
-    await this._commit({ deletes: [plan] });
+    await this._commit({ deletes: [plan], ops: [{ kind: 'delete', ...plan }] });
     this._data[collection].delete(id);
     return true;
   }
@@ -78,12 +78,16 @@ export class MemoryRepository extends Repository {
     // Removals are planned first so that a batch which frees a unique
     // relationship and re-creates it elsewhere is not rejected by itself.
     const ctx = { pending: new Set(), removing: new Map() };
+    const planned = new Map();
     for (const op of ops) {
       if (!op || op.op !== 'remove') continue;
       const key = `${op.collection}/${op.id}`;
       if (touched.has(key)) throw new Error(`applyBatch touches ${key} more than once`);
       touched.add(key);
-      deletes.push(this._planRemove(op.collection, op.id, op.expectedToken));
+      const plan = this._planRemove(op.collection, op.id, op.expectedToken, op.optional === true);
+      if (!plan) continue; // already gone, and the caller said that is fine
+      planned.set(op, plan);
+      deletes.push(plan);
       if (!ctx.removing.has(op.collection)) ctx.removing.set(op.collection, new Set());
       ctx.removing.get(op.collection).add(op.id);
     }
@@ -94,9 +98,19 @@ export class MemoryRepository extends Repository {
       const key = `${op.collection}/${op.record ? op.record.id : op.id}`;
       if (touched.has(key)) throw new Error(`applyBatch touches ${key} more than once`);
       touched.add(key);
-      puts.push(this._planSave(op.collection, op.record, op.expectedToken, ctx));
+      const plan = this._planSave(op.collection, op.record, op.expectedToken, ctx);
+      planned.set(op, plan);
+      puts.push(plan);
     }
-    await this._commit({ puts, deletes });
+    // The ordered view lets a non-atomic adapter replay the caller's order;
+    // an atomic one can keep using puts/deletes and ignore it.
+    const ordered = [];
+    for (const op of ops) {
+      const plan = op && planned.get(op);
+      if (!plan) continue;
+      ordered.push(op.op === 'remove' ? { kind: 'delete', ...plan } : { kind: 'put', ...plan });
+    }
+    await this._commit({ puts, deletes, ops: ordered });
     for (const p of puts) this._data[p.collection].set(p.record.id, p.record);
     for (const d of deletes) this._data[d.collection].delete(d.id);
     return {
@@ -217,10 +231,14 @@ export class MemoryRepository extends Repository {
     }
   }
 
-  _planRemove(collection, id, expectedToken) {
+  /** @returns {{collection, id}|null} null only when the record is gone and `optional` is set. */
+  _planRemove(collection, id, expectedToken, optional = false) {
     assertCollection(collection);
     const existing = this._data[collection].get(id);
-    if (!existing) throw new NotFoundError(collection, id);
+    if (!existing) {
+      if (optional) return null;
+      throw new NotFoundError(collection, id);
+    }
     if (expectedToken != null && tokenOf(existing) !== String(expectedToken)) {
       throw new ConflictError(collection, id, String(expectedToken), clone(existing));
     }
@@ -253,7 +271,9 @@ export class MemoryRepository extends Repository {
    * Make a plan durable. Must be atomic: either every put/delete lands or
    * none does. The base class keeps data in memory only, so there is
    * nothing to do.
-   * @param {{clearAll?: boolean, puts?: Array<{collection, record}>, deletes?: Array<{collection, id}>}} _plan
+   * @param {{clearAll?: boolean, puts?: Array<{collection, record}>, deletes?: Array<{collection, id}>, ops?: Array<{kind: 'put'|'delete', collection, record?, id?}>}} _plan
+   *        `ops` is the same work in the caller's order, for adapters that
+   *        cannot commit atomically and must replay it step by step.
    */
   async _commit(_plan) {}
 

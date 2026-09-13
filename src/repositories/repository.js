@@ -60,9 +60,15 @@ export class NotImplementedError extends Error {
  *    silently.
  * 3. `applyBatch`, `replaceAll` and `clear` are all-or-nothing. A failure
  *    anywhere leaves the store exactly as it was. An adapter that genuinely
- *    cannot be atomic must say so in `describe().atomicBatch === false` so
- *    callers can choose a different strategy.
- * 4. Records handed out are copies. Mutating a returned object never changes
+ *    cannot be atomic must say so in `describe().atomicBatch === false`.
+ * 4. Operations in a batch are applied IN THE ORDER GIVEN. An atomic adapter
+ *    may ignore this, but a non-atomic one must not: services order their
+ *    writes so that a partial failure degrades into a retryable state rather
+ *    than a corrupt one (children before parents, so a half-finished cascade
+ *    leaves a parent with fewer children instead of orphan records).
+ * 5. A remove marked `optional` succeeds when the record is already gone.
+ *    That is what makes replaying a failed batch safe.
+ * 6. Records handed out are copies. Mutating a returned object never changes
  *    what is stored.
  */
 export class Repository {
@@ -103,8 +109,8 @@ export class Repository {
   }
 
   /**
-   * Apply several writes as one unit.
-   * @param {Array<{op: 'save'|'remove', collection: string, record?: object, id?: string, expectedToken?: string|null}>} ops
+   * Apply several writes as one unit, in the order given.
+   * @param {Array<{op: 'save'|'remove', collection: string, record?: object, id?: string, expectedToken?: string|null, optional?: boolean}>} ops
    * @returns {Promise<{saved: Array<{collection, record}>, removed: Array<{collection, id}>}>}
    */
   async applyBatch(ops) {

@@ -143,10 +143,10 @@ export class StructureService {
     for (const link of placements) {
       if (node.parentId) {
         const alreadyThere = this.store.list('metricStructures').some((l) => l.metricId === link.metricId && l.structureNodeId === node.parentId);
-        if (alreadyThere) work.remove('metricStructures', link.id, tokenOf(link));
+        if (alreadyThere) work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
         else work.save('metricStructures', { ...link, structureNodeId: node.parentId }, tokenOf(link));
       } else {
-        work.remove('metricStructures', link.id, tokenOf(link));
+        work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
       }
     }
     work.remove('structureNodes', id, expectedToken == null ? tokenOf(node) : expectedToken);

@@ -79,7 +79,9 @@ drawer shows what changed and offers *Reload latest* or an explicit
 * **Imports are validated before anything is touched.** A file missing a whole
   collection that its own records reference is refused. Orphans, duplicates
   and broken hierarchies inside an otherwise sound file are repaired, and the
-  preview lists exactly what was repaired and what the import would delete.
+  preview lists what was repaired along with what the import adds, updates and
+  deletes. Deletions are counted by comparing record ids, so a smaller file
+  says so even when the collection stays non-empty.
 * **Destructive actions are undoable.** A restore point is written before every
   import, reset and clear; the three most recent are kept and restoring is
   itself undoable. If one cannot be written, the app says so instead of

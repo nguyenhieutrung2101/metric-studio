@@ -87,7 +87,7 @@ src/
     repository.js                Repository contract, COLLECTIONS, tokenOf, ConflictError, NotFoundError
     memory-repository.js         reference implementation: plan → commit → apply, uniqueness, restore points
     local-repository.js          IndexedDB adapter (one transaction per plan, schema v2)
-    sharepoint-repository.js     adapter skeleton: list mapping + ETag→version notes, no logic yet
+    sharepoint-repository.js     adapter skeleton: list mapping + ETag→concurrencyToken notes, no logic yet
   services/
     formula-parser.js            text → tokens → AST → references (pure)
     metric-service.js            metric CRUD, code allocation, reference suggestions
@@ -137,9 +137,9 @@ acknowledged.
 ## 3. Schemas
 
 All records are plain JSON objects. `id` is an immutable UUID. `version` is an
-integer incremented by the repository on every successful save and is the
-optimistic-concurrency token (`expectedVersion`). `createdAt` / `updatedAt`
-are ISO strings.
+integer incremented by the repository on every successful save, for humans to
+read; `concurrencyToken` is the opaque value passed back as `expectedToken`
+to detect a stale write (see 4.1). `createdAt` / `updatedAt` are ISO strings.
 
 ```js
 // Every record also carries: version (integer, for humans) and
@@ -183,9 +183,10 @@ MetricDimension { id, metricId, dimensionId, required, maxLevel|null, allowedMem
 Unit            { id, code, name, version, ... }
 
 // Derived, cached in DependencyService, never persisted:
-DependencyEdge  { bindingId, fromMetricId, fromScenarioId,
+DependencyEdge  { bindingId, from, to, fromMetricId, fromScenarioId,
                   targetMetricId|null, targetScenarioId, token,
-                  dimensionContext|null, isCrossScenario, resolved }
+                  dimensionContexts: [],   // every slice that produced this edge
+                  isCrossScenario, resolved }
 ```
 
 Formula reference grammar (Phase 1):
@@ -211,10 +212,10 @@ with a typo still shows what it *tried* to reference.
           │
           ▼
    Service (business rule, validation, parse, cascade)
-          │  repo.save(collection, record, expectedVersion)
+          │  repo.save(collection, record, expectedToken)
           ▼
    Repository adapter  ── Local: IndexedDB (memory mirror, write-through)
-          │              ── SharePoint (later): list item, ETag ⇄ version
+          │              ── SharePoint (later): list item, ETag ⇄ concurrencyToken
           │  returns the acknowledged record (new version) or throws ConflictError
           ▼
    Store.upsert(collection, record)   → bumps collection revision
@@ -258,6 +259,14 @@ there verbatim. Nothing outside a repository adapter parses it, compares it
 with `<`/`>`, or does arithmetic on it. A record written before tokens
 existed still works, because `tokenOf` falls back to the version.
 
+**Order is part of the contract, and removes are idempotent.** Operations in
+a batch are applied in the order they were queued. An atomic adapter may
+ignore that, but a non-atomic one must not: services queue dependent records
+before the record they depend on, and mark those removals `optional`, so that
+a partial failure degrades into a retryable state instead of orphan records.
+This costs nothing on IndexedDB and is what makes a non-transactional backend
+tolerable later.
+
 **Structural uniqueness is enforced where the data lives, not in the UI.**
 One binding per Metric × Scenario, one placement per Metric × Node, one link
 per Metric × Dimension. `UNIQUE_KEYS` in `core/collections.js` is the list a
@@ -265,6 +274,21 @@ SharePoint adapter will mirror with indexed unique columns. Business codes
 are deliberately *not* in that list: a legacy workbook does contain duplicate
 metric codes, and those must arrive and be reported by the warning centre
 rather than blocking the import.
+
+### 4.1b One definition of reference identity
+
+`referenceIdentity(ref)` in the formula parser is the only definition of what
+makes two formula references the same, and the parser, the validation rules
+and the dependency graph all use it. It combines scenario, metric token and
+dimension context, and normalises the token exactly the way references are
+resolved to metrics (`referenceKey`, so case, spacing and diacritics do not
+matter). That keeps "two references" and "two metrics" from ever disagreeing:
+`[Doanh thu]` and `[DOANH THU]` are one reference because they are one metric,
+while `[SALES | Product=A]` and `[SALES | Product=B]` are two.
+
+The dependency graph is a dependency between **metrics**, so those two slices
+still form a single edge; the edge lists every slice that produced it in
+`dimensionContexts` rather than silently keeping the first one.
 
 ### 4.2 The schema boundary
 
@@ -289,9 +313,16 @@ dangling unit references cleared, cached formula references reset so they
 re-resolve. Because every record comes out of the model factories, no view
 can meet a field an imported record happened not to have.
 
-Import always replaces, so a file that omits a collection empties it. The
-preview says exactly how many records that would delete, before the
-confirmation dialog.
+Import always replaces, so the records that disappear are the ones whose id
+is not in the file. The preview computes that by comparing id sets, not
+counts, and reports additions, updates and deletions before the confirmation
+dialog. Comparing counts would miss the ordinary case of a smaller file: 20
+incoming metrics replacing 100 deletes 80 of them while the collection stays
+non-empty.
+
+The boundary has no back door. `importSnapshot` parses its input again even
+when a caller hands it a preview result that claims to be parsed already;
+parsing is idempotent and costs about 100 ms on a 3,000 metric snapshot.
 
 ### 4.3 Restore points
 
@@ -357,11 +388,34 @@ Keyboard: `Esc` closes drawer / menus; `Ctrl/Cmd+S` saves the drawer;
   satisfy are already in place: `concurrencyToken` is opaque (its ETag drops
   straight in) and `UNIQUE_KEYS` names the relationships its lists must
   enforce with indexed unique columns.
-* **Atomicity beyond one backend.** `applyBatch` is all-or-nothing, and an
-  adapter that cannot guarantee that must say so in
-  `describe().atomicBatch === false`. SharePoint REST changesets give a
-  usable equivalent; if they prove insufficient, the honest answer is to
-  report the limitation there rather than to weaken the contract here.
+* **Atomicity beyond one backend.** `applyBatch` is all-or-nothing here, and
+  an adapter that cannot guarantee that must say so in
+  `describe().atomicBatch === false`. **SharePoint will be such an adapter.**
+  It does not roll back a failed multi-item request, and our cascades span
+  four different lists, where cross-list atomicity was never on offer at all.
+  Designing on the assumption of a rollback would be wrong regardless of how
+  changesets are documented. Three things make the loss survivable, and all
+  three are already in place:
+
+  1. **Ordering.** Operations are applied in the order queued, and services
+     queue dependent records before the record they depend on. A cascade that
+     stops halfway leaves a metric with fewer bindings, not bindings pointing
+     at a metric that is gone.
+  2. **Idempotent removes.** A removal marked `optional` succeeds when the
+     record is already gone, so replaying a failed batch is safe.
+  3. **Reconciliation through validation.** `PLACEMENT_ORPHAN`,
+     `BINDING_ORPHAN` and `METRIC_DIMENSION_ORPHAN` already detect whatever
+     does slip through, so the repair path is a rule the warning centre
+     surfaces rather than a bespoke mechanism.
+
+  An operation journal remains an option if audit history is wanted for its
+  own sake, but it is not a correctness mechanism: writing the journal entry
+  is itself not atomic with the data writes. It is a retry and repair log.
+* **`replaceAll` will not be ported to SharePoint.** Clearing nine lists and
+  re-inserting thousands of items is long, non-atomic, and cannot be made
+  safe by ordering. Import there has to become an incremental reconcile
+  (diff, upsert, delete), with a JSON export as the safety net instead of a
+  restore point.
 * **Conflict resolution beyond metrics and bindings.** The drawer diffs and
   offers an overwrite for those two. For placements and dimension links,
   which have no local draft, reloading the server record *is* the resolution,

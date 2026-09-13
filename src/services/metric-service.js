@@ -72,14 +72,21 @@ export class MetricService {
     return saved;
   }
 
-  /** Metric plus every record that only exists because of it, in one transaction. */
+  /**
+   * Metric plus every record that only exists because of it, in one
+   * transaction. The dependent records are queued first: on a backend that
+   * cannot commit atomically, stopping halfway then leaves a metric with
+   * fewer bindings, which is retryable, instead of orphan bindings pointing
+   * at a metric that is gone.
+   */
   async remove(id, expectedToken) {
     const existing = this.store.get('metrics', id);
     if (!existing) throw new NotFoundError('metrics', id);
-    const work = new UnitOfWork().remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
-    for (const l of this.store.list('metricStructures')) if (l.metricId === id) work.remove('metricStructures', l.id, tokenOf(l));
-    for (const b of this.store.list('bindings')) if (b.metricId === id) work.remove('bindings', b.id, tokenOf(b));
-    for (const l of this.store.list('metricDimensions')) if (l.metricId === id) work.remove('metricDimensions', l.id, tokenOf(l));
+    const work = new UnitOfWork();
+    for (const l of this.store.list('metricStructures')) if (l.metricId === id) work.remove('metricStructures', l.id, tokenOf(l), { optional: true });
+    for (const b of this.store.list('bindings')) if (b.metricId === id) work.remove('bindings', b.id, tokenOf(b), { optional: true });
+    for (const l of this.store.list('metricDimensions')) if (l.metricId === id) work.remove('metricDimensions', l.id, tokenOf(l), { optional: true });
+    work.remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
     await commit(this.repo, this.store, work);
     return true;
   }

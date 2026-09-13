@@ -24,6 +24,8 @@
  * error, so the UI can still show what a broken formula tried to reference.
  */
 
+import { referenceKey } from '../utils/text.js';
+
 const OPERATORS = new Set(['+', '-', '*', '/', '^']);
 
 export function tokenize(text) {
@@ -189,15 +191,22 @@ export function extractReferences(text) {
 
 /**
  * Identity of a reference: scenario, metric token and dimension context.
+ *
  * [REVENUE | Product=HRC] and [REVENUE | Product=Car] are two different
- * inputs to a formula, so they must not collapse into one.
+ * inputs to a formula, so they must not collapse into one. The token is
+ * normalised exactly the way references are resolved to metrics
+ * (`referenceKey`, so case, spacing and diacritics do not matter), which
+ * keeps "two references" and "two metrics" from ever disagreeing.
+ *
+ * This is the single definition of reference identity: the parser, the
+ * validation rules and the dependency graph all use it.
  */
 export function referenceIdentity(r) {
   const ctx = (r.dimensionContext || [])
-    .map((p) => `${String(p.dimension || '').trim().toLowerCase()}=${p.member == null ? '' : String(p.member).trim().toLowerCase()}`)
+    .map((p) => `${referenceKey(p.dimension)}=${p.member == null ? '' : referenceKey(p.member)}`)
     .sort()
     .join(';');
-  return `${r.scenarioCode || ''}:${r.token.toLowerCase()}:${ctx}`;
+  return `${(r.scenarioCode || '').toUpperCase()}:${referenceKey(r.token)}:${ctx}`;
 }
 
 /** Distinct references in order of first appearance. */

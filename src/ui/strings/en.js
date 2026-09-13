@@ -392,9 +392,10 @@ export const en = {
   'io.rejected': 'This file was refused',
   'io.repaired': 'Repaired while reading the file',
   'io.repairedCount': '{n} record(s) repaired or dropped, see the import preview',
-  'io.willDelete': 'This file does not contain everything you have now',
+  'io.willDelete': 'Records you have now that are not in this file will be deleted',
   'io.importMessageDeleting': 'The current {n} metrics and all related records will be replaced. {lost} record(s) in collections absent from the file will be deleted.',
   'conflict.reloadOnly': 'This record can only be reloaded, not overwritten.',
   'error.duplicateRelationship': 'That relationship already exists.',
   'io.restoreFailed': 'no restore point could be written, so this cannot be undone. Export a JSON backup.',
+  'io.changeSummary': 'This import adds {add}, updates {update} and deletes {remove} record(s).',
 };

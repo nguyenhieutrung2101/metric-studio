@@ -43,13 +43,14 @@ export class DimensionService {
     return saved;
   }
 
-  /** The dimension, its members and its metric links go together. */
+  /** The dimension, its members and its metric links go together, members first. */
   async deleteDimension(id, expectedToken) {
     const existing = this.store.get('dimensions', id);
     if (!existing) throw new NotFoundError('dimensions', id);
-    const work = new UnitOfWork().remove('dimensions', id, expectedToken == null ? tokenOf(existing) : expectedToken);
-    for (const m of this.selectors.membersByDimension(id)) work.remove('dimensionMembers', m.id, tokenOf(m));
-    for (const l of this.selectors.linksByDimension(id)) work.remove('metricDimensions', l.id, tokenOf(l));
+    const work = new UnitOfWork();
+    for (const m of this.selectors.membersByDimension(id)) work.remove('dimensionMembers', m.id, tokenOf(m), { optional: true });
+    for (const l of this.selectors.linksByDimension(id)) work.remove('metricDimensions', l.id, tokenOf(l), { optional: true });
+    work.remove('dimensions', id, expectedToken == null ? tokenOf(existing) : expectedToken);
     await commit(this.repo, this.store, work);
     return true;
   }

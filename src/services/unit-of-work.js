@@ -5,6 +5,11 @@
  * one transaction, and only the acknowledged result is pushed into the store.
  * A failure therefore leaves both the database and the UI state untouched,
  * instead of half a cascade.
+ *
+ * Order matters even so. A backend that cannot be atomic applies the
+ * operations in the order they were queued, so services queue dependent
+ * records before the record they depend on: a cascade that stops halfway then
+ * leaves a parent with fewer children, never an orphan pointing at nothing.
  */
 export class UnitOfWork {
   constructor() {
@@ -16,8 +21,13 @@ export class UnitOfWork {
     return this;
   }
 
-  remove(collection, id, expectedToken = null) {
-    this.ops.push({ op: 'remove', collection, id, expectedToken });
+  /**
+   * @param {boolean} [optional] true for a record that only exists because of
+   * another one: if it is already gone the batch should carry on, which is
+   * what makes replaying a failed batch safe on a non-atomic backend.
+   */
+  remove(collection, id, expectedToken = null, { optional = false } = {}) {
+    this.ops.push({ op: 'remove', collection, id, expectedToken, optional });
     return this;
   }
 

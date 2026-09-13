@@ -2,6 +2,7 @@ import { BindingType } from '../core/models/binding.js';
 import { MetricStatus } from '../core/models/metric.js';
 import { nodeKey } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
+import { referenceIdentity } from './formula-parser.js';
 
 /**
  * ValidationService — pure rule engine.
@@ -122,7 +123,7 @@ function validateBindings(store, selectors, add) {
       }
       const seen = new Set();
       for (const r of b.parsedReferences || []) {
-        const refKey = `${r.scenarioCode || ''}:${referenceKey(r.token)}`;
+        const refKey = referenceIdentity(r);
         if (seen.has(refKey)) continue;
         seen.add(refKey);
         const refParams = { ...params, ref: r.raw || r.token, token: r.token };

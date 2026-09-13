@@ -392,9 +392,10 @@ export const vi = {
   'io.rejected': 'File bị từ chối',
   'io.repaired': 'Đã sửa khi đọc file',
   'io.repairedCount': '{n} bản ghi được sửa hoặc bỏ qua, xem phần xem trước',
-  'io.willDelete': 'File này không chứa đầy đủ dữ liệu bạn đang có',
+  'io.willDelete': 'Những bản ghi bạn đang có mà file không chứa sẽ bị xoá',
   'io.importMessageDeleting': '{n} chỉ tiêu hiện tại và mọi bản ghi liên quan sẽ được thay thế. {lost} bản ghi thuộc các nhóm không có trong file sẽ bị xoá.',
   'conflict.reloadOnly': 'Bản ghi này chỉ có thể tải lại, không ghi đè được.',
   'error.duplicateRelationship': 'Quan hệ này đã tồn tại.',
   'io.restoreFailed': 'không tạo được điểm khôi phục nên thao tác này không hoàn tác được. Hãy xuất file JSON để sao lưu.',
+  'io.changeSummary': 'Lần nhập này thêm {add}, cập nhật {update} và xoá {remove} bản ghi.',
 };

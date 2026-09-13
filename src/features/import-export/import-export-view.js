@@ -102,6 +102,7 @@ export function mountImportExportView(container, ctx) {
         h('ul', { class: 'repair-list' }, result.repairs.map((r) => h('li', { text: `${r.message}${r.count > 1 ? ` (${r.count})` : ''}` }))),
       ));
     }
+    preview.appendChild(h('p', { class: 'small muted', text: t('io.changeSummary', { add: formatNumber(result.addTotal), update: formatNumber(result.updateTotal), remove: formatNumber(result.deleteTotal) }) }));
     if (result.deleteTotal > 0) {
       const lost = COLLECTIONS.filter((c) => result.willDelete[c] > 0).map((c) => `${formatNumber(result.willDelete[c])} ${t(`collection.${c}`)}`);
       preview.appendChild(h('div', { class: 'preview-block error' },

@@ -1,11 +1,14 @@
 import { nodeKey, splitNodeKey, BindingType } from '../core/models/binding.js';
+import { referenceKey } from '../utils/text.js';
 
 /**
  * DependencyService
  *
  * Builds and caches the dependency graph from Formula bindings. Nodes are
  * Metric × Scenario (`metricId|scenarioId`); an edge goes from the formula's
- * node to each referenced node. Edges carry the target scenario so that
+ * node to each referenced node. Dependency is expressed between metrics, so
+ * several dimensional slices of one metric form a single edge that lists
+ * them in `dimensionContexts`. Edges carry the target scenario so that
  * explicit cross-scenario references ([TT:REVENUE] inside a GD formula) are
  * first-class. The index is rebuilt lazily when bindings, metrics or
  * scenarios change and never persisted — users do not maintain edges.
@@ -45,7 +48,7 @@ export class DependencyService {
       if (b.type !== BindingType.FORMULA) continue;
       if (!store.has('metrics', b.metricId) || !store.has('scenarios', b.scenarioId)) continue;
       const from = nodeKey(b.metricId, b.scenarioId);
-      const seen = new Set();
+      const byTarget = new Map();
       for (const ref of b.parsedReferences || []) {
         let targetScenarioId = b.scenarioId;
         let scenarioResolved = true;
@@ -64,9 +67,15 @@ export class DependencyService {
           if (r.status === 'resolved') targetMetricId = r.metricId;
         }
 
-        const to = targetMetricId ? nodeKey(targetMetricId, targetScenarioId) : `missing:${ref.token}|${targetScenarioId}`;
-        if (seen.has(to)) continue;
-        seen.add(to);
+        const to = targetMetricId ? nodeKey(targetMetricId, targetScenarioId) : `missing:${referenceKey(ref.token)}|${targetScenarioId}`;
+        // The graph is a dependency between metrics, so two slices of the same
+        // metric are one edge. The edge carries every slice that produced it
+        // rather than silently keeping the first one.
+        const existing = byTarget.get(to);
+        if (existing) {
+          if (ref.dimensionContext) existing.dimensionContexts.push(ref.dimensionContext);
+          continue;
+        }
         const edge = {
           id: `${from}->${to}`,
           bindingId: b.id,
@@ -78,11 +87,12 @@ export class DependencyService {
           targetScenarioId,
           token: ref.token,
           scenarioCode: ref.scenarioCode || null,
-          dimensionContext: ref.dimensionContext || null,
+          dimensionContexts: ref.dimensionContext ? [ref.dimensionContext] : [],
           isCrossScenario: targetScenarioId !== b.scenarioId,
           resolved: !!targetMetricId && scenarioResolved,
           scenarioResolved,
         };
+        byTarget.set(to, edge);
         edges.push(edge);
         push(outgoing, from, edge);
         push(incoming, to, edge);
