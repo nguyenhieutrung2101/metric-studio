@@ -244,6 +244,9 @@ export const en = {
   'dep.openMetric': 'Open metric',
   'dep.makeRoot': 'Make root',
   'dep.stats': '{nodes} nodes · {edges} edges shown · {total} edges in catalogue · {cycles} cycles',
+  'dep.unknownScenario': 'unknown scenario',
+  'dep.unknownScenarioHint': 'No scenario has the code {code}, so this reference points nowhere. Fix the scenario prefix in the formula, or add the scenario under More ▾ → Master data.',
+  'dep.truncated': 'Showing the first {n} nodes. Reduce the depth or pick a closer root to see the rest.',
 
   // dimensions
   'dims.title': 'Dimensions',

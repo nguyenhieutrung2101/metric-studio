@@ -31,6 +31,7 @@ export class MemoryRepository extends Repository {
     for (const c of COLLECTIONS) this._data[c] = new Map();
     this._restorePoints = new Map();
     this._restoreSeq = 0;
+    this._writeQueue = Promise.resolve();
   }
 
   describe() {
@@ -54,15 +55,62 @@ export class MemoryRepository extends Repository {
     return rec ? clone(rec) : null;
   }
 
+  /**
+   * Every mutation runs to completion before the next one starts.
+   *
+   * Planning reads the current state and committing is asynchronous, so
+   * without this two overlapping writes would both pass the token and
+   * uniqueness checks against the same stale state and the second would
+   * silently overwrite the first. Serialising is what makes the concurrency
+   * promise in the contract true rather than aspirational.
+   */
+  _serialize(work) {
+    const result = this._writeQueue.then(work, work);
+    this._writeQueue = result.then(noop, noop);
+    return result;
+  }
+
   // ------------------------------------------------------------ single writes
-  async save(collection, record, expectedToken) {
+  save(collection, record, expectedToken) {
+    return this._serialize(() => this._saveNow(collection, record, expectedToken));
+  }
+
+  remove(collection, id, expectedToken) {
+    return this._serialize(() => this._removeNow(collection, id, expectedToken));
+  }
+
+  applyBatch(ops) {
+    return this._serialize(() => this._applyBatchNow(ops));
+  }
+
+  saveMany(collection, records) {
+    return this._serialize(() => this._saveManyNow(collection, records));
+  }
+
+  replaceAll(snapshot) {
+    return this._serialize(() => this._replaceAllNow(snapshot));
+  }
+
+  clear() {
+    return this._serialize(() => this._clearNow());
+  }
+
+  createRestorePoint(label = '', options = {}) {
+    return this._serialize(() => this._createRestorePointNow(label, options));
+  }
+
+  deleteRestorePoint(id) {
+    return this._serialize(() => this._deleteRestorePointNow(id));
+  }
+
+  async _saveNow(collection, record, expectedToken) {
     const plan = this._planSave(collection, record, expectedToken);
     await this._commit({ puts: [plan], ops: [{ kind: 'put', ...plan }] });
     this._data[collection].set(plan.record.id, plan.record);
     return clone(plan.record);
   }
 
-  async remove(collection, id, expectedToken) {
+  async _removeNow(collection, id, expectedToken) {
     const plan = this._planRemove(collection, id, expectedToken);
     await this._commit({ deletes: [plan], ops: [{ kind: 'delete', ...plan }] });
     this._data[collection].delete(id);
@@ -70,7 +118,7 @@ export class MemoryRepository extends Repository {
   }
 
   // ------------------------------------------------------------ batch
-  async applyBatch(ops) {
+  async _applyBatchNow(ops) {
     if (!Array.isArray(ops)) throw new Error('applyBatch expects an array of operations');
     const puts = [];
     const deletes = [];
@@ -79,13 +127,20 @@ export class MemoryRepository extends Repository {
     // relationship and re-creates it elsewhere is not rejected by itself.
     const ctx = { pending: new Set(), removing: new Map() };
     const planned = new Map();
+    const alreadyGone = [];
     for (const op of ops) {
       if (!op || op.op !== 'remove') continue;
       const key = `${op.collection}/${op.id}`;
       if (touched.has(key)) throw new Error(`applyBatch touches ${key} more than once`);
       touched.add(key);
       const plan = this._planRemove(op.collection, op.id, op.expectedToken, op.optional === true);
-      if (!plan) continue; // already gone, and the caller said that is fine
+      if (!plan) {
+        // Already gone in the store. The caller asked us to carry on, but it
+        // still has to learn the record no longer exists, or its own mirror
+        // keeps showing something the database does not have.
+        alreadyGone.push({ collection: op.collection, id: op.id });
+        continue;
+      }
       planned.set(op, plan);
       deletes.push(plan);
       if (!ctx.removing.has(op.collection)) ctx.removing.set(op.collection, new Set());
@@ -115,12 +170,15 @@ export class MemoryRepository extends Repository {
     for (const d of deletes) this._data[d.collection].delete(d.id);
     return {
       saved: puts.map((p) => ({ collection: p.collection, record: clone(p.record) })),
-      removed: deletes.map((d) => ({ collection: d.collection, id: d.id })),
+      // Records that were already absent are reported as removed too: after
+      // this call they are gone, which is all the caller needs to know.
+      removed: [...deletes.map((d) => ({ collection: d.collection, id: d.id })), ...alreadyGone],
+      alreadyGone,
     };
   }
 
   // ------------------------------------------------------------ bulk
-  async saveMany(collection, records) {
+  async _saveManyNow(collection, records) {
     assertCollection(collection);
     const prepared = this._prepareBulk(collection, records);
     await this._commit({ puts: prepared });
@@ -128,7 +186,7 @@ export class MemoryRepository extends Repository {
     return prepared.map((p) => clone(p.record));
   }
 
-  async replaceAll(snapshot) {
+  async _replaceAllNow(snapshot) {
     const puts = [];
     for (const c of COLLECTIONS) {
       assertCollection(c);
@@ -143,7 +201,7 @@ export class MemoryRepository extends Repository {
     return out;
   }
 
-  async clear() {
+  async _clearNow() {
     await this._commit({ clearAll: true });
     for (const c of COLLECTIONS) this._data[c].clear();
   }
@@ -158,7 +216,7 @@ export class MemoryRepository extends Repository {
     return [...this._restorePoints.values()].sort((a, b) => (b.seq || 0) - (a.seq || 0) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  async createRestorePoint(label = '', { max = 3 } = {}) {
+  async _createRestorePointNow(label = '', { max = 3 } = {}) {
     const data = await this.loadAll();
     const counts = {};
     let total = 0;
@@ -180,7 +238,7 @@ export class MemoryRepository extends Repository {
     return p ? clone(p) : null;
   }
 
-  async deleteRestorePoint(id) {
+  async _deleteRestorePointNow(id) {
     if (!this._restorePoints.has(id)) return false;
     await this._deleteRestorePoint(id);
     this._restorePoints.delete(id);
@@ -188,7 +246,7 @@ export class MemoryRepository extends Repository {
   }
 
   async _pruneRestorePoints(max) {
-    for (const old of this._sortedRestorePoints().slice(max)) await this.deleteRestorePoint(old.id);
+    for (const old of this._sortedRestorePoints().slice(max)) await this._deleteRestorePointNow(old.id);
   }
 
   // ------------------------------------------------------------ planning
@@ -281,3 +339,5 @@ export class MemoryRepository extends Repository {
 
   async _deleteRestorePoint(_id) {}
 }
+
+function noop() {}

@@ -40,8 +40,9 @@ export function mountDependencyView(container, ctx) {
     h('span', { class: 'legend-item' }, h('span', { class: 'legend-hint', text: t('dep.legendHint') })),
   );
   const emptyState = h('div', { class: 'empty graph-empty' }, icon('graph', { size: 32 }), h('p', { text: t('dep.empty') }), h('div', { class: 'suggest-list' }));
+  const truncatedNote = h('div', { class: 'graph-note', role: 'status', hidden: true });
   const panel = h('aside', { class: 'pane side-panel', hidden: true });
-  const body = h('div', { class: 'dep-layout' }, h('div', { class: 'graph-area' }, canvasHost, legend, emptyState), panel);
+  const body = h('div', { class: 'dep-layout' }, h('div', { class: 'graph-area' }, canvasHost, truncatedNote, legend, emptyState), panel);
   const root = h('div', { class: 'view-single dep-view' }, toolbar, body);
   container.appendChild(root);
 
@@ -75,19 +76,20 @@ export function mountDependencyView(container, ctx) {
 
   // ---------------------------------------------------------------- nodes
   function renderNode(node) {
-    const type = node.missing ? 'missing' : node.type;
-    const scenario = node.scenario ? node.scenario.code : '?';
+    const type = node.missing || node.unknownScenario ? 'missing' : node.type;
+    const scenario = node.scenarioCode || '?';
     const issues = node.metricId ? ctx.validation.issuesForMetric(node.metricId).filter((i) => !i.scenarioId || i.scenarioId === node.scenarioId) : [];
     const sev = worstSeverity(issues);
     const el = h('div', { class: ['node-card', `type-${type}`, node.isRoot && 'root', node.external && 'external', node.inCycle && 'cycle', node.metric && node.metric.status !== 'approved' && `status-${node.metric.status}`], role: 'button', tabindex: '0', title: node.metric ? `${node.metric.code} · ${node.metric.name}` : node.token });
     el.append(
-      h('div', { class: 'node-top' }, h('span', { class: 'node-scn', text: scenario }), h('span', { class: `node-type chip-${type}`, text: node.missing ? t('dep.missing') : t(`binding.type.${type}.short`) }), sev && h('span', { class: `sev-dot sev-${sev}` })),
+      h('div', { class: 'node-top' }, h('span', { class: ['node-scn', node.unknownScenario && 'unknown'], text: scenario }), h('span', { class: `node-type chip-${type}`, text: node.unknownScenario ? t('dep.unknownScenario') : node.missing ? t('dep.missing') : t(`binding.type.${type}.short`) }), sev && h('span', { class: `sev-dot sev-${sev}` })),
       h('div', { class: 'node-name', text: node.metric ? node.metric.name : node.token }),
       h('div', { class: 'node-code mono', text: node.metric ? node.metric.code : t('dep.unresolved') }),
     );
-    if (node.hasMoreDown && !node.missing) el.appendChild(h('button', { type: 'button', class: 'node-expand right', title: t('dep.expandDown'), on: { click: (e) => { e.stopPropagation(); expand(node.key); } } }, '+'));
-    if (node.hasMoreUp && !node.missing) el.appendChild(h('button', { type: 'button', class: 'node-expand left', title: t('dep.expandUp'), on: { click: (e) => { e.stopPropagation(); expand(node.key); } } }, '+'));
-    if (!node.isRoot && !node.missing && state.graph && state.graph.edges.some((e) => e.from === node.key) && !state.collapsed.has(node.key) && node.depth > 0) {
+    const inert = node.missing || node.unknownScenario;
+    if (node.hasMoreDown && !inert) el.appendChild(h('button', { type: 'button', class: 'node-expand right', title: t('dep.expandDown'), on: { click: (e) => { e.stopPropagation(); expand(node.key); } } }, '+'));
+    if (node.hasMoreUp && !inert) el.appendChild(h('button', { type: 'button', class: 'node-expand left', title: t('dep.expandUp'), on: { click: (e) => { e.stopPropagation(); expand(node.key); } } }, '+'));
+    if (!node.isRoot && !inert && state.graph && state.graph.edges.some((e) => e.from === node.key) && !state.collapsed.has(node.key) && node.depth > 0) {
       el.appendChild(h('button', { type: 'button', class: 'node-expand right collapse', title: t('dep.collapse'), on: { click: (e) => { e.stopPropagation(); collapse(node.key); } } }, '−'));
     }
     return el;
@@ -116,10 +118,13 @@ export function mountDependencyView(container, ctx) {
     if (!has) {
       renderSuggestions();
       panel.hidden = true;
+      truncatedNote.hidden = true;
       statsEl.textContent = '';
       return;
     }
     state.graph = dep.subgraph({ metricId: state.metricId, scenarioId: state.scenarioId, mode: state.mode, depthDown: state.depthDown, depthUp: state.depthUp, expanded: state.expanded, collapsed: state.collapsed });
+    truncatedNote.hidden = !state.graph.truncated;
+    if (state.graph.truncated) truncatedNote.textContent = t('dep.truncated', { n: formatNumber(state.graph.nodeLimit) });
     view.setGraph(state.graph, { keepView });
     if (state.selected && !state.graph.nodes.has(state.selected)) state.selected = null;
     applyHighlight();
@@ -185,8 +190,17 @@ export function mountDependencyView(container, ctx) {
     const node = state.graph.nodes.get(key);
     const m = node.metric;
     const b = node.binding;
-    panel.append(h('div', { class: 'pane-head' }, h('span', { class: 'pane-title', text: m ? m.name : node.token }), btn('', { icon: 'close', size: 'sm', title: t('common.close'), on: { click: () => select(null) } })));
+    panel.append(h('div', { class: 'pane-head' }, h('span', { class: 'pane-title', text: m ? m.name : node.token || '?' }), btn('', { icon: 'close', size: 'sm', title: t('common.close'), on: { click: () => select(null) } })));
     const content = h('div', { class: 'side-content' });
+    if (node.unknownScenario) {
+      content.append(h('p', { class: 'hint warn', text: t('dep.unknownScenarioHint', { code: node.scenarioCode || '?' }) }));
+      for (const e of state.graph.edges.filter((x) => x.to === key)) {
+        const from = state.graph.nodes.get(e.from);
+        if (from && from.metric) content.appendChild(h('button', { type: 'button', class: 'suggestion', on: { click: () => ctx.openMetric(from.metricId, { section: 'bindings', scenarioId: from.scenarioId }) } }, h('span', { class: 'mono muted', text: from.metric.code }), h('span', { text: t('dep.fixIn', { name: from.metric.name }) })));
+      }
+      panel.appendChild(content);
+      return;
+    }
     if (!m) {
       content.append(h('p', { class: 'hint warn', text: t('dep.missingHint', { token: node.token }) }));
       const users = state.graph.edges.filter((e) => e.to === key);
@@ -198,7 +212,7 @@ export function mountDependencyView(container, ctx) {
       return;
     }
     content.append(
-      h('div', { class: 'side-row' }, h('span', { class: 'mono muted', text: m.code }), bindingChip(node.scenario.code, b && b.type !== 'none' ? b.type : null)),
+      h('div', { class: 'side-row' }, h('span', { class: 'mono muted', text: m.code }), bindingChip(node.scenarioCode || '?', b && b.type !== 'none' ? b.type : null)),
       m.definition && h('p', { class: 'side-def', text: m.definition }),
     );
     if (b && b.type === 'formula') content.append(h('div', { class: 'side-label', text: t('binding.formula') }), h('pre', { class: 'formula-pre', text: b.formulaText }));
@@ -210,7 +224,7 @@ export function mountDependencyView(container, ctx) {
       if (!edges.length) return null;
       return h('div', null, h('div', { class: 'side-label', text: `${label} (${edges.length})` }), h('ul', { class: 'rel-list' }, edges.map((e) => {
         const other = state.graph.nodes.get(pick(e));
-        return h('li', null, h('button', { type: 'button', class: 'link', on: { click: () => select(pick(e)) } }, h('span', { class: 'mono muted', text: other && other.metric ? other.metric.code : '?' }), h('span', { text: other && other.metric ? other.metric.name : e.token })), e.isCrossScenario && h('span', { class: 'tag tag-cross', text: other && other.scenario ? other.scenario.code : '' }), !e.resolved && h('span', { class: 'tag tag-warn', text: t('dep.missing') }));
+        return h('li', null, h('button', { type: 'button', class: 'link', on: { click: () => select(pick(e)) } }, h('span', { class: 'mono muted', text: other && other.metric ? other.metric.code : '?' }), h('span', { text: other && other.metric ? other.metric.name : e.token })), e.isCrossScenario && h('span', { class: 'tag tag-cross', text: (other && other.scenarioCode) || '' }), !e.resolved && h('span', { class: 'tag tag-warn', text: t('dep.missing') }));
       })));
     };
     content.append(relList(down, (e) => e.to, t('dep.dependsOn')), relList(up, (e) => e.from, t('dep.usedBy')));

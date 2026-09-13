@@ -109,17 +109,26 @@ export function createSelectors(store) {
   /** Deduplicated set of metric ids in a node and all its descendants. */
   const subtreeIndex = () =>
     cached('subtreeIndex', ['structureNodes', 'metricStructures', 'metrics'], () => {
-      const { roots } = structureTree();
+      const { roots, byId } = structureTree();
       const { byNode } = placementIndex();
       const result = new Map();
-      const walk = (entry) => {
+      // `children` is built from parentId links, which concurrent edits can
+      // make cyclic. Every traversal carries a guard: a broken hierarchy must
+      // surface as a validation error, never as a stack overflow.
+      const walk = (entry, path) => {
+        if (result.has(entry.node.id)) return result.get(entry.node.id);
+        if (path.has(entry.node.id)) return EMPTY_SET;
+        path.add(entry.node.id);
         const set = new Set();
         for (const id of byNode.get(entry.node.id) || []) if (store.has('metrics', id)) set.add(id);
-        for (const child of entry.children) for (const id of walk(child)) set.add(id);
+        for (const child of entry.children) for (const id of walk(child, path)) set.add(id);
+        path.delete(entry.node.id);
         result.set(entry.node.id, set);
         return set;
       };
-      for (const r of roots) walk(r);
+      for (const r of roots) walk(r, new Set());
+      // Nodes trapped in a cycle are never reached from a root.
+      for (const entry of byId.values()) if (!result.has(entry.node.id)) walk(entry, new Set());
       return result;
     });
 

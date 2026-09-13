@@ -1,6 +1,30 @@
 import { nodeKey, splitNodeKey, BindingType } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
 
+const UNKNOWN_SCENARIO = 'unknown-scenario:';
+
+/**
+ * A reference such as `[XX:REVENUE]` names a scenario that does not exist.
+ * It must not collapse onto the node of the scenario the formula happens to
+ * live in — that would claim REVENUE|TT is a dependency when nothing says so.
+ * The unresolved code therefore gets its own scenario identity, which no real
+ * scenario id can collide with because real ids never contain a colon.
+ */
+export function unknownScenarioId(code) {
+  return `${UNKNOWN_SCENARIO}${String(code || '').trim().toUpperCase()}`;
+}
+
+export function isUnknownScenarioId(id) {
+  return typeof id === 'string' && id.startsWith(UNKNOWN_SCENARIO);
+}
+
+export function unknownScenarioCode(id) {
+  return isUnknownScenarioId(id) ? id.slice(UNKNOWN_SCENARIO.length) : null;
+}
+
+/** Default ceiling on how many nodes one focused subgraph may materialise. */
+export const SUBGRAPH_NODE_LIMIT = 300;
+
 /**
  * DependencyService
  *
@@ -54,8 +78,12 @@ export class DependencyService {
         let scenarioResolved = true;
         if (ref.scenarioCode) {
           const s = selectors.scenarioByCode(ref.scenarioCode);
-          if (s) targetScenarioId = s.id;
-          else scenarioResolved = false;
+          if (s) {
+            targetScenarioId = s.id;
+          } else {
+            scenarioResolved = false;
+            targetScenarioId = unknownScenarioId(ref.scenarioCode);
+          }
         } else if (ref.scenarioId && store.has('scenarios', ref.scenarioId)) {
           targetScenarioId = ref.scenarioId;
         }
@@ -126,13 +154,26 @@ export class DependencyService {
       const i = rest.lastIndexOf('|');
       const token = rest.slice(0, i);
       const scenarioId = rest.slice(i + 1);
-      return { key, metricId: null, scenarioId, metric: null, scenario: this.store.get('scenarios', scenarioId), binding: null, type: 'missing', missing: true, token };
+      const scenario = this.store.get('scenarios', scenarioId);
+      return {
+        key, metricId: null, scenarioId, metric: null, scenario, binding: null,
+        type: 'missing', missing: true, token,
+        unknownScenario: isUnknownScenarioId(scenarioId),
+        scenarioCode: scenario ? scenario.code : unknownScenarioCode(scenarioId),
+      };
     }
     const { metricId, scenarioId } = splitNodeKey(key);
     const metric = this.store.get('metrics', metricId);
     const scenario = this.store.get('scenarios', scenarioId);
-    const binding = this.selectors.bindingFor(metricId, scenarioId);
-    return { key, metricId, scenarioId, metric, scenario, binding, type: binding ? binding.type : BindingType.NONE, missing: !metric };
+    const unknownScenario = isUnknownScenarioId(scenarioId);
+    const binding = unknownScenario ? null : this.selectors.bindingFor(metricId, scenarioId);
+    return {
+      key, metricId, scenarioId, metric, scenario, binding,
+      type: binding ? binding.type : BindingType.NONE,
+      missing: !metric,
+      unknownScenario,
+      scenarioCode: scenario ? scenario.code : unknownScenarioCode(scenarioId),
+    };
   }
 
   /**
@@ -145,17 +186,27 @@ export class DependencyService {
    * @param {number} [opts.depthUp=1]    how many levels of dependents (what uses the root)
    * @param {Set<string>} [opts.expanded]  node keys expanded beyond the default depth
    * @param {Set<string>} [opts.collapsed] node keys whose branches are hidden
+   * @param {number} [opts.maxNodes]  hard ceiling on materialised nodes; the
+   *   breadth-first walk stops at the budget and the result is flagged
+   *   `truncated` so the view can say so. One hub metric used by 5,000 others
+   *   would otherwise lay out 5,001 cards at depth 1.
    */
-  subgraph({ metricId, scenarioId, mode = 'same', depthDown = 3, depthUp = 1, expanded = new Set(), collapsed = new Set() }) {
+  subgraph({ metricId, scenarioId, mode = 'same', depthDown = 3, depthUp = 1, expanded = new Set(), collapsed = new Set(), maxNodes = SUBGRAPH_NODE_LIMIT }) {
     const root = nodeKey(metricId, scenarioId);
     const nodes = new Map();
     const edges = new Map();
+    const budget = Math.max(1, maxNodes);
+    let truncated = false;
 
     const addNode = (key, depth) => {
       if (nodes.has(key)) {
         const n = nodes.get(key);
         if (Math.abs(depth) < Math.abs(n.depth)) n.depth = depth;
         return n;
+      }
+      if (nodes.size >= budget) {
+        truncated = true;
+        return null;
       }
       const info = this.nodeInfo(key);
       const node = {
@@ -173,6 +224,7 @@ export class DependencyService {
 
     const mayExpand = (node, depth, limit) => {
       if (node.missing) return false;
+      if (node.unknownScenario) return false;
       if (collapsed.has(node.key)) return false;
       if (node.external) return false;
       if (expanded.has(node.key)) return true;
@@ -192,8 +244,13 @@ export class DependencyService {
         continue;
       }
       for (const e of out) {
+        // An edge whose endpoint the budget refused has nothing to point at,
+        // so it stays out of the layout and the node keeps its fringe marker.
+        if (!addNode(e.to, depth + 1)) {
+          node.hasMoreDown = true;
+          continue;
+        }
         edges.set(e.id, e);
-        addNode(e.to, depth + 1);
         if (!visitedDown.has(e.to)) {
           visitedDown.add(e.to);
           queueDown.push([e.to, depth + 1]);
@@ -213,8 +270,11 @@ export class DependencyService {
         continue;
       }
       for (const e of inc) {
+        if (!addNode(e.from, -(depth + 1))) {
+          node.hasMoreUp = true;
+          continue;
+        }
         edges.set(e.id, e);
-        addNode(e.from, -(depth + 1));
         if (!visitedUp.has(e.from)) {
           visitedUp.add(e.from);
           queueUp.push([e.from, depth + 1]);
@@ -231,7 +291,7 @@ export class DependencyService {
     const cycleKeys = this.cycleMembers();
     for (const node of nodes.values()) node.inCycle = cycleKeys.has(node.key);
 
-    return { root, nodes, edges: [...edges.values()] };
+    return { root, nodes, edges: [...edges.values()], truncated, nodeLimit: budget };
   }
 
   /** Keys reachable from `key` following edges in the given direction, within a subgraph edge list. */
@@ -260,6 +320,11 @@ export class DependencyService {
   /**
    * Cycles in the whole graph (resolved edges only), as arrays of node keys.
    * Iterative Tarjan SCC so deep chains cannot overflow the stack.
+   *
+   * Each frame keeps the successor list it is iterating. Recomputing it on
+   * every loop pass turns one node with N dependencies into N filter+map
+   * passes over N edges — 5,000 dependencies cost ~750 ms; the frame makes it
+   * one pass, so the whole walk stays linear in edges.
    */
   findCycles() {
     const idx = this._index();
@@ -278,29 +343,37 @@ export class DependencyService {
     const cycles = [];
     let counter = 0;
 
+    const enter = (v) => {
+      index.set(v, counter);
+      low.set(v, counter);
+      counter += 1;
+      stack.push(v);
+      onStack.add(v);
+      const succ = [];
+      let selfLoop = false;
+      for (const e of outgoing.get(v) || []) {
+        if (!e.resolved) continue;
+        succ.push(e.to);
+        if (e.to === v) selfLoop = true;
+      }
+      return { v, i: 0, succ, selfLoop };
+    };
+
     for (const start of keys) {
       if (index.has(start)) continue;
-      const work = [[start, 0]];
+      const work = [enter(start)];
       while (work.length) {
         const frame = work[work.length - 1];
-        const v = frame[0];
-        if (frame[1] === 0) {
-          index.set(v, counter);
-          low.set(v, counter);
-          counter += 1;
-          stack.push(v);
-          onStack.add(v);
-        }
-        const succ = (outgoing.get(v) || []).filter((e) => e.resolved).map((e) => e.to);
-        if (frame[1] < succ.length) {
-          const w = succ[frame[1]];
-          frame[1] += 1;
-          if (!index.has(w)) work.push([w, 0]);
+        const { v, succ } = frame;
+        if (frame.i < succ.length) {
+          const w = succ[frame.i];
+          frame.i += 1;
+          if (!index.has(w)) work.push(enter(w));
           else if (onStack.has(w)) low.set(v, Math.min(low.get(v), index.get(w)));
         } else {
           work.pop();
           if (work.length) {
-            const parent = work[work.length - 1][0];
+            const parent = work[work.length - 1].v;
             low.set(parent, Math.min(low.get(parent), low.get(v)));
           }
           if (low.get(v) === index.get(v)) {
@@ -311,7 +384,7 @@ export class DependencyService {
               onStack.delete(w);
               comp.push(w);
             } while (w !== v);
-            if (comp.length > 1 || succ.includes(v)) cycles.push(comp.reverse());
+            if (comp.length > 1 || frame.selfLoop) cycles.push(comp.reverse());
           }
         }
       }

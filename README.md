@@ -16,6 +16,9 @@ npm start            # zero-dependency static server → http://localhost:8080
 npm test             # node:test suites over the pure modules (no browser needed)
 ```
 
+`npm start` binds to the loopback interface, serves only `index.html`, `css/`
+and `src/`, and sends the same Content-Security-Policy as the deployed site,
+so a policy violation shows up in development rather than after a deploy.
 Any static file server works (`python3 -m http.server`, VS Code Live Server…);
 the app is `index.html` + `css/` + `src/`. Opening `index.html` directly from
 disk works in browsers that allow ES modules on `file://`.
@@ -90,6 +93,9 @@ drawer shows what changed and offers *Reload latest* or an explicit
   for the same scenario, two placements in one group, or two links to one
   dimension. Duplicate business codes are allowed in and reported as findings,
   because legacy workbooks contain them.
+* **Two writes cannot cross.** Every mutation goes through one queue, so a
+  check and its write are never separated by an await. Racing saves end with
+  one winner and one explicit conflict, never two silent winners.
 
 ## Deploy (Cloudflare Workers)
 
@@ -150,5 +156,6 @@ docs/ARCHITECTURE.md  architecture and decisions
   presence, SPFx packaging.
 
 Integrity and concurrency hardening (v0.2) is done: transactional writes,
-schema-validated import, restore points, uniqueness at the persistence
-boundary, and a failure-injection test suite.
+serialised mutations, schema-validated import, restore points, uniqueness at
+the persistence boundary, a strict Content-Security-Policy, and
+failure-injection plus regression test suites (105 tests, `npm test`).

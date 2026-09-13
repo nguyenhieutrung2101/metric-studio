@@ -3,6 +3,9 @@
 /*
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
+  # The app is ES modules from its own origin with no inline script, so a
+  # strict policy costs nothing. Widen frame-ancestors when it is embedded.
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'
 
 # The entry point must never be served stale, or a deploy would leave users
 # on an old index.html referencing modules that no longer exist.

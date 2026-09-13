@@ -73,16 +73,31 @@ export class LocalRepository extends MemoryRepository {
     for (const d of deletes) touched.add(d.collection);
     if (touched.size === 0) return;
     const tx = this._db.transaction([...touched], 'readwrite');
-    if (clearAll) for (const c of COLLECTIONS) tx.objectStore(c).clear();
-    for (const p of puts) tx.objectStore(p.collection).put(p.record);
-    for (const d of deletes) tx.objectStore(d.collection).delete(d.id);
+    try {
+      if (clearAll) for (const c of COLLECTIONS) tx.objectStore(c).clear();
+      for (const p of puts) tx.objectStore(p.collection).put(p.record);
+      for (const d of deletes) tx.objectStore(d.collection).delete(d.id);
+    } catch (err) {
+      // put() throws synchronously on an unclonable value or a bad key. The
+      // requests queued before it would otherwise still commit, leaving the
+      // database changed while the caller is told the write failed.
+      abort(tx);
+      await txSettled(tx);
+      throw err;
+    }
     await txDone(tx);
   }
 
   async _commitRestorePoint(point) {
     if (!this._db) return;
     const tx = this._db.transaction(RESTORE_STORE, 'readwrite');
-    tx.objectStore(RESTORE_STORE).put(point);
+    try {
+      tx.objectStore(RESTORE_STORE).put(point);
+    } catch (err) {
+      abort(tx);
+      await txSettled(tx);
+      throw err;
+    }
     await txDone(tx);
   }
 
@@ -125,6 +140,23 @@ function idbRequest(req) {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error || new Error('IndexedDB request failed'));
+  });
+}
+
+function abort(tx) {
+  try {
+    tx.abort();
+  } catch {
+    /* already finished or aborting */
+  }
+}
+
+/** Resolve once the transaction has finished, however it finished. */
+function txSettled(tx) {
+  return new Promise((resolve) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => resolve();
+    tx.onabort = () => resolve();
   });
 }
 

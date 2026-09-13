@@ -234,8 +234,9 @@ never overwrites. Presence ("Trung is editing Revenue · GD") is a separate
 
 ### 4.1 Integrity rules (v0.2)
 
-Four rules hold at the persistence boundary, and the failure-injection suite
-in `tests/integrity.test.mjs` keeps them honest.
+Six rules hold at the persistence boundary. The failure-injection suite in
+`tests/integrity.test.mjs` and the regression suite in
+`tests/regressions.test.mjs` keep them honest.
 
 **A write is acknowledged only when it is durable.** Every mutation is
 planned, committed, then applied: the in-memory mirror is updated *after* the
@@ -267,6 +268,23 @@ a partial failure degrades into a retryable state instead of orphan records.
 This costs nothing on IndexedDB and is what makes a non-transactional backend
 tolerable later.
 
+**Writes are serialised, so a check and its write cannot be separated.**
+Every mutating repository call goes through one promise queue. A check-then-act
+sequence — read the token, compare it, plan the write — spans an `await` on the
+durable commit, and two callers interleaving there would both pass the check
+and both write: the second silently overwriting the first, and a unique
+relationship ending up with two records. The queue makes each mutation
+indivisible with respect to the others, so one of the two racers is refused
+with `ConflictError` or `UniquenessError`. It costs nothing in the single-user
+case, where there is never anything in the queue.
+
+**A removal that found nothing is still reported.** A batch may mark a removal
+`optional` when it is cleaning up records it believes exist. When one is
+already gone, the batch succeeds and lists it under `alreadyGone` — and in
+`removed`, because after the call it is absent either way. The caller's mirror
+therefore drops it too; before, the store kept showing a placement the
+database no longer had.
+
 **Structural uniqueness is enforced where the data lives, not in the UI.**
 One binding per Metric × Scenario, one placement per Metric × Node, one link
 per Metric × Dimension. `UNIQUE_KEYS` in `core/collections.js` is the list a
@@ -289,6 +307,30 @@ while `[SALES | Product=A]` and `[SALES | Product=B]` are two.
 The dependency graph is a dependency between **metrics**, so those two slices
 still form a single edge; the edge lists every slice that produced it in
 `dimensionContexts` rather than silently keeping the first one.
+
+A reference whose scenario prefix names no scenario — `[XX:REVENUE]` — gets a
+node of its own (`unknownScenarioId('XX')`). It must not fall back to the
+scenario the formula happens to live in: that would draw an edge to
+`REVENUE|TT` and make the graph assert a dependency nobody wrote. The node is
+a leaf, is never expanded through, and the side panel says which code is
+unknown and where to fix it.
+
+### 4.1c Two budgets on the graph
+
+The graph is derived, so its cost is governed rather than cached away.
+
+**Cycle detection is linear in edges.** Tarjan's walk keeps each frame's
+successor list on the frame. Rebuilding it on every step of the walk over that
+same list makes one node with N dependencies cost N², which measured 749 ms
+for N = 5,000 — on the main thread, on every validation pass.
+
+**A focused subgraph has a node ceiling** (`SUBGRAPH_NODE_LIMIT`, 300). The
+breadth-first expansion stops at the budget, the outermost nodes keep their
+"more" markers, and the result is flagged `truncated` so the view says so
+above the canvas. One hub metric used by 2,000 others would otherwise lay out
+2,001 cards at depth 1 — the one thing the focused graph exists to avoid.
+Edges whose endpoint the budget refused are left out entirely, so the layout
+never has to place an edge with one end missing.
 
 ### 4.2 The schema boundary
 
@@ -332,6 +374,25 @@ Destructive operations are therefore undoable from the Import / Export page,
 and the toast offers *Undo* directly. If a restore point cannot be written,
 the operation still runs — a user whose storage is full needs clearing to
 work — but the UI says plainly that it cannot be undone.
+
+---
+
+### 4.4 What the browser is allowed to do
+
+`index.html` has no inline script and no inline event handler, so a strict
+policy is nearly free. `_headers` sends
+`default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:;
+connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'`,
+which means an injected string can never become a script, a form target or a
+base URL, on top of the existing rule that user text is only ever set through
+`textContent`.
+
+`scripts/serve.mjs` sends the same headers, binds to the loopback interface,
+and serves only what `.assetsignore` leaves in the published site
+(`index.html`, `css/`, `src/`); anything else, dotfiles included, is a 404. A
+development server that hands `.git` or `package.json` to everyone on the
+same café network is a real leak even when the deployed site is configured
+correctly. The allow-list is exported and tested rather than swept by hand.
 
 ---
 

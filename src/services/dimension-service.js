@@ -48,11 +48,34 @@ export class DimensionService {
     const existing = this.store.get('dimensions', id);
     if (!existing) throw new NotFoundError('dimensions', id);
     const work = new UnitOfWork();
-    for (const m of this.selectors.membersByDimension(id)) work.remove('dimensionMembers', m.id, tokenOf(m), { optional: true });
+    for (const m of this._membersDeepestFirst(id)) work.remove('dimensionMembers', m.id, tokenOf(m), { optional: true });
     for (const l of this.selectors.linksByDimension(id)) work.remove('metricDimensions', l.id, tokenOf(l), { optional: true });
     work.remove('dimensions', id, expectedToken == null ? tokenOf(existing) : expectedToken);
     await commit(this.repo, this.store, work);
     return true;
+  }
+
+  /**
+   * Children before their parents. On a backend that cannot commit
+   * atomically, stopping halfway then leaves a parent with fewer children
+   * rather than orphan members whose parent is gone.
+   */
+  _membersDeepestFirst(dimensionId) {
+    const members = this.selectors.membersByDimension(dimensionId);
+    const depth = new Map();
+    const byId = new Map(members.map((m) => [m.id, m]));
+    for (const m of members) {
+      let d = 0;
+      let cur = m;
+      const seen = new Set();
+      while (cur && cur.parentId && !seen.has(cur.id)) {
+        seen.add(cur.id);
+        cur = byId.get(cur.parentId);
+        d += 1;
+      }
+      depth.set(m.id, d);
+    }
+    return [...members].sort((a, b) => depth.get(b.id) - depth.get(a.id));
   }
 
   // ------------------------------------------------------------ members
@@ -124,9 +147,12 @@ export class DimensionService {
     const root = this.store.get('dimensionMembers', rootId);
     if (!root) return;
     const stack = [{ id: rootId, level: rootLevel }];
+    const seen = new Set([rootId]);
     while (stack.length) {
       const cur = stack.pop();
       for (const child of this._memberSiblings(root.dimensionId, cur.id)) {
+        if (seen.has(child.id)) continue; // cyclic parent links cannot spin here
+        seen.add(child.id);
         const level = cur.level + 1;
         if (child.level !== level) work.save('dimensionMembers', { ...child, level }, tokenOf(child));
         stack.push({ id: child.id, level });

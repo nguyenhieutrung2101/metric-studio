@@ -189,6 +189,15 @@ export function parseSnapshot(input) {
     }
   }
 
+  // The model factory already dropped anything that was not a usable
+  // reference; say so rather than letting a file quietly lose its lineage.
+  for (let i = 0; i < data.bindings.length; i += 1) {
+    const incoming = lists.bindings.find((b) => b && b.id === data.bindings[i].id);
+    const before = Array.isArray(incoming && incoming.parsedReferences) ? incoming.parsedReferences.length : 0;
+    const after = data.bindings[i].parsedReferences.length;
+    if (before > after) addRepair('REFERENCE_DROPPED', 'Formula reference that was not usable: dropped and left to be re-parsed', before - after);
+  }
+
   // Cached formula references pointing at metrics that are not in the file are
   // reset so they get re-resolved instead of pointing into nothing.
   for (const b of data.bindings) {
