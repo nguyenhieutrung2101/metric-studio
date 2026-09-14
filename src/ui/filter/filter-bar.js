@@ -79,6 +79,22 @@ export function filterBar({ search = null, filters = [], onChange = () => {}, pr
     onChange({ ...values });
   }
 
+  /** Apply several values at once (from a route), one onChange. */
+  function setMany(next) {
+    for (const f of filters) if (Object.prototype.hasOwnProperty.call(next, f.key)) values[f.key] = f.type === 'toggle' ? !!next[f.key] : (next[f.key] == null ? '' : next[f.key]);
+    renderChips();
+    onChange({ ...values });
+  }
+
+  /** Set the search box (from a route) and tell the view. */
+  function setSearch(q) {
+    if (!searchInput) return;
+    const v = q == null ? '' : String(q);
+    if (searchInput.value === v) return;
+    searchInput.value = v;
+    if (search.onChange) search.onChange(v);
+  }
+
   let pop = null;
   let stop = null;
   function closeMenu() {
@@ -108,5 +124,5 @@ export function filterBar({ search = null, filters = [], onChange = () => {}, pr
   }
 
   for (const f of filters) values[f.key] = f.type === 'toggle' ? false : '';
-  return { el, searchInput, values, set, reset, renderChips, close: closeMenu };
+  return { el, searchInput, values, set, setMany, setSearch, reset, renderChips, close: closeMenu };
 }

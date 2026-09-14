@@ -11,6 +11,7 @@ import { contextBar, contextSelect } from '../../ui/workspace/context-bar.js';
 import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
 import { createInsightsPanel } from '../../ui/workspace/insights-panel.js';
 import { filterBar } from '../../ui/filter/filter-bar.js';
+import { writeFilters, readFilters, filtersDiffer, normalizeCoverage } from '../../ui/workspace/route-state.js';
 import { renderMetricInsights } from '../metric-master/metric-insights.js';
 import { renderBindingInsights } from './binding-insights.js';
 
@@ -73,9 +74,27 @@ export function mountBindingsView(container, ctx) {
     scenarioCtx.setValue('', list.length === allScenarios.length ? t('bindings.allScenarios') : list.map((s) => s.code).join(', '));
     ctx.router.setParams({ scenarios: list.length === allScenarios.length ? null : list.map((s) => s.code).join(',') });
     if (state.scenarioId && !state.visible.has(state.scenarioId)) state.scenarioId = null;
+    // A context change normalises the filters in the same step. No filter
+    // may keep acting on rows without a control that shows it: "partial"
+    // means nothing with one scenario, and a type filter on a scenario that
+    // left the context is dropped.
+    const coverage = normalizeCoverage(state.coverage, list.length);
+    if (coverage !== state.coverage) {
+      ctx.toast.info(t('bindings.partialReset'));
+      setCoverage(coverage);
+    }
+    const drop = {};
+    for (const s of allScenarios) if (!state.visible.has(s.id) && state.filters[`type:${s.id}`]) drop[`type:${s.id}`] = '';
+    if (Object.keys(drop).length) filters.setMany(drop);
     renderHead();
     refresh({ keepScroll: true });
     renderInsights();
+  }
+
+  /** Put the context back to every scenario — what an overview tile means by "all". */
+  function contextAll() {
+    for (const s of allScenarios) state.visible.add(s.id);
+    applyContext();
   }
 
   // ---------------------------------------------------------------- filters
@@ -86,14 +105,18 @@ export function mountBindingsView(container, ctx) {
     segButtons.set(v, b);
     return b;
   }));
+  const FILTER_SPEC = Object.fromEntries([
+    ...allScenarios.map((s) => [`type:${s.id}`, { param: `t_${s.code}` }]),
+    ['warningsOnly', { type: 'toggle', param: 'warn' }],
+  ]);
   const filters = filterBar({
-    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; refresh({ keepScroll: false }); }, onEnter: () => { if (state.items.length) selectCell(state.items[0].id, state.scenarioId); } },
+    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; ctx.router.setParams({ q: q || null }); refresh({ keepScroll: false }); }, onEnter: () => { if (state.items.length) selectCell(state.items[0].id, state.scenarioId); } },
     filters: [
       ...allScenarios.map((s) => ({ key: `type:${s.id}`, label: t('bindings.typeFilter', { scenario: s.code }), options: BINDING_TYPES.filter((x) => x !== 'none').map((x) => ({ value: x, label: t(`binding.type.${x}`) })) })),
       { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
     ],
     extra: [coverageSeg],
-    onChange: (values) => { state.filters = values; refresh({ keepScroll: false }); },
+    onChange: (values) => { state.filters = values; writeFilters(ctx.router, values, FILTER_SPEC); refresh({ keepScroll: false }); },
   });
 
   function setCoverage(v) {
@@ -114,7 +137,9 @@ export function mountBindingsView(container, ctx) {
     keyOf: (m) => m.id,
     emptyNode: empty,
     renderRow,
-    onSelect: (m) => selectCell(m ? m.id : null, null),
+    // Arrow keys walk rows and keep the column; a click on the row's own
+    // cells (code, name) inspects the metric.
+    onSelect: (m, { source } = {}) => selectCell(m ? m.id : null, source === 'keyboard' ? state.scenarioId : null),
     onActivate: (m) => open(m.id, state.scenarioId),
     header: head,
   });
@@ -268,20 +293,37 @@ export function mountBindingsView(container, ctx) {
 
   return {
     onShow() { list.refresh(); },
+    onHide() {},
+    onShortcut(e) {
+      if (e.key === '/') { e.preventDefault(); filters.searchInput.focus(); filters.searchInput.select(); }
+    },
     update(route) {
       const p = route.params;
-      if (p.scenarios) {
+      if (p.scenarios === 'all') {
+        // A drill-through that means every scenario, whatever this page remembered.
+        if (state.visible.size !== allScenarios.length) contextAll();
+        ctx.router.setParams({ scenarios: null });
+      } else if (p.scenarios) {
         const codes = new Set(String(p.scenarios).split(',').map((c) => c.trim().toUpperCase()));
         const wanted = allScenarios.filter((s) => codes.has(s.code.toUpperCase())).map((s) => s.id);
         if (wanted.length && (wanted.length !== state.visible.size || wanted.some((id) => !state.visible.has(id)))) { state.visible = new Set(wanted); applyContext(); }
       }
-      const coverage = COVERAGE.includes(p.coverage) ? p.coverage : '';
+      const wantedFilters = readFilters(p, FILTER_SPEC);
+      if (filtersDiffer(state.filters, wantedFilters, FILTER_SPEC)) filters.setMany(wantedFilters);
+      if ((p.q || '') !== state.query) filters.setSearch(p.q || '');
+      const coverage = normalizeCoverage(COVERAGE.includes(p.coverage) ? p.coverage : '', scenarios().length);
       if (coverage !== state.coverage) setCoverage(coverage);
       const scenario = p.scenario ? selectors.scenarioByCode(p.scenario) : null;
-      if (p.selected && store.has('metrics', p.selected) && (p.selected !== state.selectedId || (scenario ? scenario.id : null) !== state.scenarioId)) {
+      if (p.selected && store.has('metrics', p.selected)) {
+        if (!state.items.some((m) => m.id === p.selected)) {
+          // The link asked for this metric; filters that hide it are cleared, and said so.
+          filters.reset();
+          if (state.coverage) setCoverage('');
+          ctx.toast.info(t('mm.filtersClearedToReveal'));
+        }
+        if (p.selected !== state.selectedId || (scenario ? scenario.id : null) !== state.scenarioId) selectCell(p.selected, scenario ? scenario.id : null);
         const idx = state.items.findIndex((m) => m.id === p.selected);
         if (idx >= 0) list.scrollToIndex(idx);
-        selectCell(p.selected, scenario ? scenario.id : null);
       }
       const metricId = p.metric;
       if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId, { section: 'bindings', scenarioId: scenario ? scenario.id : null });

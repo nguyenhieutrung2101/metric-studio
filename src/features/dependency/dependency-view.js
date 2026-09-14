@@ -72,7 +72,11 @@ export function mountDependencyView(container, ctx) {
   const tableSearchWrap = h('div', { class: 'search', hidden: true }, icon('search', { className: 'search-icon' }), tableSearch);
   const tableScenario = h('select', { class: 'input input-sm', hidden: true });
   const tableCount = h('span', { class: 'muted small', hidden: true });
-  const viewBar = h('div', { class: 'view-bar' }, h('span', { class: 'view-bar-label', text: t('dep.viewMode') }), modeSeg, depthDown, depthUp, tableSearchWrap, tableScenario, h('span', { class: 'spacer' }), tableCount);
+  // Graph and Table are two views of the same context. The table lists the
+  // edges of the graph on screen by default; "All catalogue" is an explicit
+  // scope that says so, and only there does a scenario filter make sense.
+  const scopeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': t('dep.scopeLabel'), hidden: true });
+  const viewBar = h('div', { class: 'view-bar' }, h('span', { class: 'view-bar-label', text: t('dep.viewMode') }), modeSeg, depthDown, depthUp, scopeSeg, tableSearchWrap, tableScenario, h('span', { class: 'spacer' }), tableCount);
 
   // ---------------------------------------------------------------- canvas + table
   const canvasHost = h('div', { class: 'graph-host' });
@@ -89,7 +93,8 @@ export function mountDependencyView(container, ctx) {
     h('span', { text: t('dep.col.sourceScenario') }), h('span', { text: t('dep.col.source') }), h('span', { class: 'num', text: t('dep.col.seq') }),
     h('span', { text: t('dep.col.refType') }), h('span', { text: t('dep.col.dimension') }), h('span', { text: t('dep.col.operator') }),
   );
-  const tableEmpty = h('div', { class: 'empty', hidden: true }, icon('graph', { size: 28 }), h('p', { text: t('dep.tableEmpty') }));
+  const tableEmptyText = h('p', { text: t('dep.tableEmpty') });
+  const tableEmpty = h('div', { class: 'empty', hidden: true }, icon('graph', { size: 28 }), tableEmptyText);
   const tableHost = h('div', { class: 'list-host' });
   const tableArea = h('div', { class: 'edge-table', hidden: true }, tableHost, tableEmpty);
   const main = h('section', { class: 'pane dep-main' }, graphArea, tableArea);
@@ -99,7 +104,7 @@ export function mountDependencyView(container, ctx) {
   layout.el.insertBefore(viewBar, layout.body);
   container.appendChild(layout.el);
 
-  const tableState = { query: '', scenarioId: '', selected: null };
+  const tableState = { query: '', scenarioId: '', selected: null, scope: 'graph' };
   const table = new VirtualList(tableHost, {
     rowHeight: 'dense',
     keyOf: (r) => r.id,
@@ -127,15 +132,32 @@ export function mountDependencyView(container, ctx) {
     applyMode();
   }
 
+  function renderScopeSeg() {
+    clear(scopeSeg);
+    for (const sc of ['graph', 'all']) {
+      scopeSeg.appendChild(h('button', { type: 'button', role: 'radio', class: ['seg-btn', tableState.scope === sc && 'active'], 'aria-checked': String(tableState.scope === sc), on: { click: () => setScope(sc) } }, t(`dep.scope.${sc}`)));
+    }
+  }
+
+  function setScope(sc) {
+    if (tableState.scope === sc) return;
+    tableState.scope = sc;
+    ctx.router.setParams({ scope: sc === 'all' ? 'all' : null });
+    renderScopeSeg();
+    applyMode();
+  }
+
   function applyMode() {
     const tableOn = viewMode === 'table';
     graphArea.hidden = tableOn;
     tableArea.hidden = !tableOn;
-    for (const el of [depthDown, depthUp]) el.hidden = tableOn;
-    for (const el of [tableSearchWrap, tableScenario, tableCount]) el.hidden = !tableOn;
+    // Depth is a graph setting; it still shapes the table when the table
+    // lists this graph's edges, so it stays visible in that scope.
+    for (const el of [depthDown, depthUp]) el.hidden = tableOn && tableState.scope === 'all';
+    for (const el of [tableSearchWrap, tableCount, scopeSeg]) el.hidden = !tableOn;
+    tableScenario.hidden = !tableOn || tableState.scope !== 'all';
     if (tableOn) {
-      refreshTable();
-      renderTableInsights(table.itemOf(tableState.selected));
+      render({ keepView: true });
     } else {
       render({ keepView: true });
     }
@@ -158,11 +180,22 @@ export function mountDependencyView(container, ctx) {
   function refreshTable() {
     const q = tableState.query.trim().toLowerCase();
     let rows = dep.referenceRows();
-    if (tableState.scenarioId) rows = rows.filter((r) => r.targetScenarioId === tableState.scenarioId);
+    const inGraph = tableState.scope === 'graph';
+    if (inGraph) {
+      // The same edges the canvas draws, one row per reference occurrence.
+      const ids = new Set(state.graph ? state.graph.edges.map((e) => e.id) : []);
+      rows = rows.filter((r) => ids.has(r.edgeId));
+      tableEmptyText.textContent = state.metricId ? t('dep.tableEmpty') : t('dep.tableNoRoot');
+    } else {
+      if (tableState.scenarioId) rows = rows.filter((r) => r.targetScenarioId === tableState.scenarioId);
+      tableEmptyText.textContent = t('dep.tableEmpty');
+    }
     if (q) rows = rows.filter((r) => [r.targetCode, r.targetName, r.targetAliases, r.sourceCode, r.sourceName, r.sourceAliases, r.token, r.formulaText].some((v) => String(v || '').toLowerCase().includes(q)));
     table.setItems(rows);
+    // A row the table no longer shows is not inspected either.
+    if (tableState.selected && !rows.some((r) => r.id === tableState.selected)) { tableState.selected = null; renderTableInsights(null); }
     table.setSelected(tableState.selected);
-    tableCount.textContent = t('dep.tableCount', { n: formatNumber(rows.length), total: formatNumber(dep.edges().length) });
+    tableCount.textContent = inGraph ? t('dep.tableCountGraph', { n: formatNumber(rows.length) }) : t('dep.tableCount', { n: formatNumber(rows.length), total: formatNumber(dep.referenceRows().length) });
   }
 
   function renderTableInsights(row) {
@@ -182,6 +215,7 @@ export function mountDependencyView(container, ctx) {
   tableScenario.addEventListener('change', () => { tableState.scenarioId = tableScenario.value; refreshTable(); });
   fillTableScenario();
   renderModeSeg();
+  renderScopeSeg();
 
   const view = new GraphView(canvasHost, {
     renderNode,
@@ -247,23 +281,28 @@ export function mountDependencyView(container, ctx) {
   // ---------------------------------------------------------------- render
   function render({ keepView = false, navigate = false } = {}) {
     renderScenarioCtx();
-    if (viewMode === 'table') {
-      refreshTable();
-      return;
-    }
     if (navigate) ctx.router.setParams({ metric: state.metricId, scenario: store.get('scenarios', state.scenarioId)?.code, mode: state.mode === 'cross' ? 'cross' : null });
     const has = state.metricId && store.has('metrics', state.metricId) && state.scenarioId;
-    emptyState.hidden = !!has;
+    const tableOn = viewMode === 'table';
+    emptyState.hidden = !!has || tableOn;
     canvasHost.hidden = !has;
     legend.hidden = !has;
     if (!has) {
-      renderSuggestions();
-      insights.setContent(null);
+      state.graph = null;
+      if (!tableOn) { renderSuggestions(); insights.setContent(null); }
       truncatedNote.hidden = true;
       statsEl.textContent = '';
+      if (tableOn) refreshTable();
       return;
     }
+    // The same subgraph feeds the canvas and the table: one context, two views.
     state.graph = dep.subgraph({ metricId: state.metricId, scenarioId: state.scenarioId, mode: state.mode, depthDown: state.depthDown, depthUp: state.depthUp, expanded: state.expanded, collapsed: state.collapsed });
+    if (tableOn) {
+      const s = dep.stats();
+      statsEl.textContent = t('dep.stats', { nodes: formatNumber(state.graph.nodes.size), edges: formatNumber(state.graph.edges.length), total: formatNumber(s.edges), cycles: s.cycles });
+      refreshTable();
+      return;
+    }
     truncatedNote.hidden = !state.graph.truncated;
     if (state.graph.truncated) truncatedNote.textContent = t('dep.truncated', { n: formatNumber(state.graph.nodeLimit), e: formatNumber(state.graph.edgeLimit) });
     view.setGraph(state.graph, { keepView });
@@ -378,6 +417,8 @@ export function mountDependencyView(container, ctx) {
     update(route) {
       const p = route.params;
       const wanted = p.view === 'table' ? 'table' : 'graph';
+      const wantedScope = p.scope === 'all' ? 'all' : 'graph';
+      if (wantedScope !== tableState.scope) { tableState.scope = wantedScope; renderScopeSeg(); }
       if (wanted !== viewMode) {
         viewMode = wanted;
         renderModeSeg();
@@ -395,6 +436,10 @@ export function mountDependencyView(container, ctx) {
       } else render();
     },
     onShow() { if (viewMode === 'table') table.refresh(); },
+    onHide() {},
+    onShortcut(e) {
+      if (e.key === '/' && viewMode === 'table') { e.preventDefault(); tableSearch.focus(); tableSearch.select(); }
+    },
     onDrawerClosed() {},
     onMetricOpened() {},
     destroy() { offStore(); offValidation(); schedule.cancel(); onTableSearch.cancel(); table.destroy(); view.destroy(); layout.el.remove(); },

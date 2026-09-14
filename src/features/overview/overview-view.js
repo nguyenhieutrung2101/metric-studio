@@ -66,9 +66,10 @@ export function mountOverviewView(container, ctx) {
       h('div', { class: 'ov-bar', role: 'img', 'aria-label': t('overview.coverageHint', { complete: counts.complete, total: store.count('metrics') }) },
         h('span', { class: 'complete', style: { width: pct(counts.complete) } }), h('span', { class: 'partial', style: { width: pct(counts.partial) } }), h('span', { class: 'missing', style: { width: pct(counts.missing) } })),
       h('div', { class: 'ov-tiles' },
-        tile(counts.complete, t('overview.complete'), { className: 'kpi-ok', onClick: () => go('bindings', { coverage: 'complete' }) }),
-        tile(counts.partial, t('overview.partial'), { className: 'kpi-warning', onClick: () => go('bindings', { coverage: 'partial' }) }),
-        tile(counts.missing, t('overview.missing'), { className: 'kpi-error', onClick: () => go('bindings', { coverage: 'missing' }) }),
+        // Counted over every scenario, so the page they open is put in that context explicitly.
+        tile(counts.complete, t('overview.complete'), { className: 'kpi-ok', onClick: () => go('bindings', { coverage: 'complete', scenarios: 'all' }) }),
+        tile(counts.partial, t('overview.partial'), { className: 'kpi-warning', onClick: () => go('bindings', { coverage: 'partial', scenarios: 'all' }) }),
+        tile(counts.missing, t('overview.missing'), { className: 'kpi-error', onClick: () => go('bindings', { coverage: 'missing', scenarios: 'all' }) }),
       ),
       h('p', { class: 'muted small', text: t('overview.coverageHint', { complete: formatNumber(counts.complete), total: formatNumber(store.count('metrics')) }) }),
     );
@@ -84,13 +85,13 @@ export function mountOverviewView(container, ctx) {
     const items = [];
     if (errors) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('quality', { severity: 'error' }) } }, severityDot('error'), h('span', { class: 'ellipsis', text: t('overview.errors', { n: formatNumber(errors) }) }), icon('chevronRight', { size: 14 })));
     if (warnings) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('quality', { severity: 'warning' }) } }, severityDot('warning'), h('span', { class: 'ellipsis', text: t('overview.warnings', { n: formatNumber(warnings) }) }), icon('chevronRight', { size: 14 })));
-    if (missing) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('bindings', { coverage: 'missing' }) } }, icon('link', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.missingCoverage', { n: formatNumber(missing) }) }), icon('chevronRight', { size: 14 })));
+    if (missing) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('bindings', { coverage: 'missing', scenarios: 'all' }) } }, icon('link', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.missingCoverage', { n: formatNumber(missing) }) }), icon('chevronRight', { size: 14 })));
     if (unplaced) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { node: 'unplaced' }) } }, icon('folder', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.unplaced', { n: formatNumber(unplaced) }) }), icon('chevronRight', { size: 14 })));
-    if (drafts) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics') } }, icon('edit', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.drafts', { n: formatNumber(drafts) }) }), icon('chevronRight', { size: 14 })));
+    if (drafts) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { status: 'draft' }) } }, icon('edit', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.drafts', { n: formatNumber(drafts) }) }), icon('chevronRight', { size: 14 })));
     const top = index.issues.filter((i) => i.severity !== 'info').slice(0, 5);
     return card(t('overview.attention'), { link: { label: t('overview.openQuality'), onClick: () => go('quality') } },
       items.length ? h('ul', { class: 'ov-list' }, items.map((b) => h('li', null, b))) : h('p', { class: ['insight-para', 'insight-ok'], text: t('overview.allClear') }),
-      top.length ? h('div', null, h('div', { class: 'insight-heading', text: t('overview.topIssues') }), h('ul', { class: 'ov-list' }, top.map((i) => h('li', null, h('button', { type: 'button', class: 'ov-item', title: ctx.describeIssue(i), on: { click: () => go('quality', { severity: i.severity }) } }, severityDot(i.severity), h('span', { class: 'ellipsis', text: ctx.describeIssue(i) })))))) : null,
+      top.length ? h('div', null, h('div', { class: 'insight-heading', text: t('overview.topIssues') }), h('ul', { class: 'ov-list' }, top.map((i) => h('li', null, h('button', { type: 'button', class: 'ov-item', title: ctx.describeIssue(i), on: { click: () => go('quality', { issue: i.id }) } }, severityDot(i.severity), h('span', { class: 'ellipsis', text: ctx.describeIssue(i) })))))) : null,
     );
   }
 

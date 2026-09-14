@@ -56,7 +56,7 @@ export class VirtualList {
     this.rows.addEventListener('click', (e) => {
       const row = e.target.closest('[data-key]');
       if (!row || e.target.closest('button, a, input, select')) return;
-      this.select(row.dataset.key);
+      this.select(row.dataset.key, 'pointer');
     });
     this.rows.addEventListener('dblclick', (e) => {
       const row = e.target.closest('[data-key]');
@@ -156,9 +156,10 @@ export class VirtualList {
     if (!silent && this.onSelect) this.onSelect(this.itemOf(key));
   }
 
-  select(key) {
+  /** @param {'pointer'|'keyboard'|'program'} [source] how the selection was made; views that keep a column across rows read it. */
+  select(key, source = 'program') {
     this.setSelected(key, { silent: true });
-    if (this.onSelect) this.onSelect(this.itemOf(key));
+    if (this.onSelect) this.onSelect(this.itemOf(key), { source });
   }
 
   activate(key) {
@@ -172,18 +173,18 @@ export class VirtualList {
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       const next = e.key === 'ArrowDown' ? Math.min(this.items.length - 1, idx + 1) : Math.max(0, idx - 1);
-      this.select(this.keyOf(this.items[next]));
+      this.select(this.keyOf(this.items[next]), 'keyboard');
       this.scrollToIndex(next);
     } else if (e.key === 'Enter' && idx >= 0) {
       e.preventDefault();
       this.activate(this.selectedKey);
     } else if (e.key === 'Home') {
       e.preventDefault();
-      this.select(this.keyOf(this.items[0]));
+      this.select(this.keyOf(this.items[0]), 'keyboard');
       this.scrollToIndex(0);
     } else if (e.key === 'End') {
       e.preventDefault();
-      this.select(this.keyOf(this.items[this.items.length - 1]));
+      this.select(this.keyOf(this.items[this.items.length - 1]), 'keyboard');
       this.scrollToIndex(this.items.length - 1);
     }
   }

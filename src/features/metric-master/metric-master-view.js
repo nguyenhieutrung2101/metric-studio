@@ -15,6 +15,7 @@ import { contextBar, contextSelect } from '../../ui/workspace/context-bar.js';
 import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
 import { createInsightsPanel } from '../../ui/workspace/insights-panel.js';
 import { filterBar } from '../../ui/filter/filter-bar.js';
+import { writeFilters, readFilters, filtersDiffer } from '../../ui/workspace/route-state.js';
 import { nodeOptions } from './metric-drawer.js';
 import { renderMetricInsights } from './metric-insights.js';
 
@@ -59,16 +60,20 @@ export function mountMetricMasterView(container, ctx) {
   const context = contextBar(structureCtx.el, h('span', { class: 'spacer' }), h('span', { class: 'ctx-hint muted small', text: t('mm.contextHint') }));
 
   // ---------------------------------------------------------------- filters
+  // Every filter has a place in the URL, so a remembered route, a bookmark
+  // and a drill-through from elsewhere all mean the same rows.
+  const FILTER_SPEC = { status: {}, coverage: {}, unitId: { param: 'unit' }, dimensionId: { param: 'dimension' }, warningsOnly: { type: 'toggle', param: 'warn' }, direct: { type: 'toggle' } };
   const filters = filterBar({
-    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; refreshList({ keepScroll: false }); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
+    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; ctx.router.setParams({ q: q || null }); refreshList({ keepScroll: false }); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
     filters: [
       { key: 'status', label: t('metric.field.status'), options: METRIC_STATUSES.map((s) => ({ value: s, label: t(`metric.status.${s}`) })) },
       { key: 'coverage', label: t('mm.filter.coverage'), options: () => coverageOptions() },
       { key: 'unitId', label: t('metric.field.unit'), options: () => selectors.units().map((u) => ({ value: u.id, label: u.code })) },
       { key: 'dimensionId', label: t('mm.filter.dimension'), options: () => selectors.dimensionsSorted().map((d) => ({ value: d.id, label: `${d.code} ${d.name}` })) },
       { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
+      { key: 'direct', label: t('mm.filter.direct'), type: 'toggle' },
     ],
-    onChange: (values) => { state.filters = values; refreshList({ keepScroll: false }); },
+    onChange: (values) => { state.filters = values; writeFilters(ctx.router, values, FILTER_SPEC); refreshList({ keepScroll: false }); },
   });
   const searchInput = filters.searchInput;
 
@@ -265,7 +270,20 @@ export function mountMetricMasterView(container, ctx) {
     if (state.nodeId === 'all') return null;
     if (state.nodeId === 'unplaced') return selectors.unplacedMetricIds();
     if (!store.has('structureNodes', state.nodeId)) return null;
-    return selectors.metricIdsUnderNode(state.nodeId);
+    // "This group only" is a filter on the context, not a different context:
+    // the group stays selected, its sub-groups' metrics are hidden.
+    return state.filters.direct ? selectors.metricIdsInNode(state.nodeId) : selectors.metricIdsUnderNode(state.nodeId);
+  }
+
+  /**
+   * A context that stopped existing — a bookmark to a deleted group, a node
+   * removed in another tab or by an import — falls back to "all" and says
+   * so, instead of a grid that claims a scope it cannot show.
+   */
+  function normalizeNode(nodeId) {
+    if (nodeId === 'all' || nodeId === 'unplaced' || store.has('structureNodes', nodeId)) return nodeId;
+    ctx.toast.info(t('mm.nodeGone'));
+    return 'all';
   }
 
   function computeItems() {
@@ -314,7 +332,8 @@ export function mountMetricMasterView(container, ctx) {
       });
       structureCtx.setValue(state.nodeId, path.map((n) => n.name).join(' › '));
     }
-    const total = state.nodeId === 'all' ? store.count('metrics') : scopeIds().size;
+    const scope = scopeIds();
+    const total = scope ? scope.size : store.count('metrics');
     countLabel.textContent = state.items.length === total ? t('mm.count', { n: formatNumber(total) }) : t('mm.countFiltered', { n: formatNumber(state.items.length), total: formatNumber(total) });
   }
 
@@ -377,6 +396,10 @@ export function mountMetricMasterView(container, ctx) {
   const scheduleList = debounce(() => { refreshList(); renderInsights(); }, 30);
   const offStore = store.events.on('change', (evt) => {
     const c = evt.collection;
+    if (c === 'structureNodes' && state.nodeId !== 'all' && state.nodeId !== 'unplaced' && !store.has('structureNodes', state.nodeId)) {
+      selectNode(normalizeNode(state.nodeId));
+      return;
+    }
     if (c === '*') { scheduleTree(); scheduleList(); return; }
     if (c === 'structureNodes' || c === 'metricStructures' || c === 'metrics') scheduleTree();
     if (['metrics', 'metricStructures', 'bindings', 'metricDimensions', 'units', 'structureNodes', 'dimensions'].includes(c)) scheduleList();
@@ -386,13 +409,6 @@ export function mountMetricMasterView(container, ctx) {
     else list.refresh();
     renderInsights();
   });
-  const offKeys = keyHandler((e) => {
-    if (e.key === '/' && !isTyping()) {
-      e.preventDefault();
-      searchInput.focus();
-      searchInput.select();
-    }
-  });
 
   updateSortMarks();
   renderTree();
@@ -400,9 +416,15 @@ export function mountMetricMasterView(container, ctx) {
 
   return {
     update(route) {
-      const nodeId = route.params.node || 'all';
+      const nodeId = normalizeNode(route.params.node || 'all');
+      if (nodeId !== (route.params.node || 'all')) ctx.router.setParams({ node: null });
       const first = !initialised;
       initialised = true;
+      // Filters and query come from the route: a remembered route resumes
+      // them, a drill-through sets them explicitly.
+      const wanted = readFilters(route.params, FILTER_SPEC);
+      if (filtersDiffer(state.filters, wanted, FILTER_SPEC)) filters.setMany(wanted);
+      if ((route.params.q || '') !== state.query) filters.setSearch(route.params.q || '');
       if (nodeId !== state.nodeId || first) {
         state.nodeId = nodeId;
         if (store.has('structureNodes', nodeId)) {
@@ -414,7 +436,18 @@ export function mountMetricMasterView(container, ctx) {
         refreshList({ keepScroll: false });
       }
       const selected = route.params.selected;
-      if (selected && store.has('metrics', selected) && selected !== state.selectedId) select(selected);
+      if (selected && store.has('metrics', selected)) {
+        // A direct link to a metric shows that metric. If the filters hide
+        // it, they are cleared — and the person is told — rather than the
+        // link landing on a grid where the requested row is nowhere.
+        if (!state.items.some((m) => m.id === selected)) {
+          if (!selectors.metricIdsUnderNode(state.nodeId).has(selected) && state.nodeId !== 'all' && !(state.nodeId === 'unplaced' && selectors.unplacedMetricIds().has(selected))) selectNode('all');
+          if (!state.items.some((m) => m.id === selected)) { filters.reset(); ctx.toast.info(t('mm.filtersClearedToReveal')); }
+        }
+        if (selected !== state.selectedId) select(selected);
+        const idx = state.items.findIndex((m) => m.id === selected);
+        if (idx >= 0) list.scrollToIndex(idx);
+      }
       if (route.params.new) {
         // A quick action from elsewhere ("New metric"): open the dialog once, then forget the flag.
         ctx.router.setParams({ new: null });
@@ -425,6 +458,15 @@ export function mountMetricMasterView(container, ctx) {
     },
     onShow() {
       list.refresh();
+    },
+    onHide() {},
+    /** `/` focuses search — only while this workspace is the one on screen. */
+    onShortcut(e) {
+      if (e.key === '/') {
+        e.preventDefault();
+        searchInput.focus();
+        searchInput.select();
+      }
     },
     onDrawerClosed() {
       ctx.router.setParams({ metric: null });
@@ -439,7 +481,7 @@ export function mountMetricMasterView(container, ctx) {
     destroy() {
       offStore();
       offValidation();
-      offKeys();
+      
       list.destroy();
       layout.el.remove();
     },
@@ -450,12 +492,3 @@ function coverageOptions() {
   return ['complete', 'partial', 'missing'].map((v) => ({ value: v, label: t(`coverage.${v}`) }));
 }
 
-function keyHandler(fn) {
-  document.addEventListener('keydown', fn);
-  return () => document.removeEventListener('keydown', fn);
-}
-
-function isTyping() {
-  const el = document.activeElement;
-  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable);
-}

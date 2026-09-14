@@ -153,7 +153,11 @@ export async function start(rootEl) {
         entry = { host, view: VIEWS[path](host, ctx) };
         mounted.set(path, entry);
       }
-      for (const [p, m] of mounted) m.host.hidden = p !== path;
+      for (const [p, m] of mounted) {
+        const hide = p !== path;
+        if (hide && !m.host.hidden && m.view.onHide) m.view.onHide();
+        m.host.hidden = hide;
+      }
       active.path = path;
       active.view = entry.view;
       shell.setActive(path);
@@ -163,8 +167,14 @@ export async function start(rootEl) {
     active.view.update(route);
   }
   router.onChange(mount);
+  // What a view does to its own route — a selection, a context, a filter —
+  // is what "back to this page" should bring back, not only what the route
+  // was when the page was first opened.
+  router.onParams((route) => { if (VIEWS[route.path]) lastRoute.set(route.path, { ...route.params }); });
   // Views bake the scenario list into their columns and filters; when that
-  // list changes (or the whole catalogue is replaced) they start over.
+  // list changes, or the whole catalogue is replaced (import, restore,
+  // reset), every view starts over — the active one included, or it would
+  // keep the old scenario columns over the new data.
   store.events.on('change', (evt) => {
     if (evt.collection !== 'scenarios' && evt.collection !== '*') return;
     for (const [p, m] of mounted) {
@@ -173,7 +183,7 @@ export async function start(rootEl) {
       m.host.remove();
       mounted.delete(p);
     }
-    if (active.path && evt.collection === 'scenarios') {
+    if (active.path) {
       const m = mounted.get(active.path);
       m.view.destroy();
       m.host.replaceChildren();
@@ -219,6 +229,16 @@ export async function start(rootEl) {
   };
   storage.onChange(applyStorage);
   shell.setStorage(storage.info);
+  // Keyboard shortcuts go to the workspace on screen and nowhere else: a
+  // hidden view never receives one, and nothing fires while typing, during
+  // IME composition, or while a dialog, menu or navigation list is open.
+  document.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.defaultPrevented) return;
+    const el = document.activeElement;
+    if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return;
+    if (document.querySelector('dialog[open], .menu, .nav-pop:not([hidden]), .ctx-pop, .filter-menu')) return;
+    if (active.view && active.view.onShortcut) active.view.onShortcut(e);
+  });
   // The browser's own "leave this page?" prompt, while an editor holds a
   // draft or a save has not been acknowledged yet. Best effort: a killed
   // process gets no prompt, and nothing is auto-saved on the way out.

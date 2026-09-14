@@ -360,6 +360,7 @@ export function mountDimensionsView(container, ctx) {
     update(route) {
       const id = route.params.dimension;
       const memberId = route.params.member;
+      if (id && !store.has('dimensions', id)) { ctx.toast.info(t('dims.dimensionGone')); ctx.router.setParams({ dimension: null, member: null }); selectDimension(null); return; }
       if (id && store.has('dimensions', id) && id !== state.dimensionId) selectDimension(id, { keepMember: true });
       if (memberId && store.has('dimensionMembers', memberId) && memberId !== state.memberId) {
         const m = store.get('dimensionMembers', memberId);

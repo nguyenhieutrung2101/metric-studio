@@ -107,7 +107,7 @@ export function mountStructureView(container, ctx) {
       ),
       insightSection(t('structure.contents'),
         h('div', { class: 'insight-stats' },
-          insightStat(formatNumber(counts.direct), t('structure.directMetrics'), { onClick: () => ctx.router.navigate('metrics', { node: node.id }) }),
+          insightStat(formatNumber(counts.direct), t('structure.directMetrics'), { onClick: () => ctx.router.navigate('metrics', { node: node.id, direct: 1 }) }),
           insightStat(formatNumber(counts.total), t('structure.totalMetrics'), { onClick: () => ctx.router.navigate('metrics', { node: node.id }) }),
           insightStat(formatNumber(children), t('structure.subGroups')),
         ),
@@ -119,7 +119,7 @@ export function mountStructureView(container, ctx) {
         btn(t('common.rename'), { size: 'sm', icon: 'edit', on: { click: () => renameNode(node) } }),
         btn(t('mm.addSubNode'), { size: 'sm', icon: 'plus', on: { click: () => addNode(node.id) } }),
         btn(t('mm.moveTo'), { size: 'sm', icon: 'arrowRight', on: { click: () => moveNodeDialog(node) } }),
-        btn(t('mm.newMetricHere'), { size: 'sm', icon: 'layers', on: { click: () => ctx.router.navigate('metrics', { node: node.id }) } }),
+        btn(t('mm.newMetricHere'), { size: 'sm', icon: 'layers', on: { click: () => ctx.router.navigate('metrics', { node: node.id, new: 1 }) } }),
         btn(t('common.delete'), { size: 'sm', icon: 'trash', kind: 'danger-ghost', on: { click: () => deleteNode(node) } }),
       ),
     );
@@ -214,6 +214,13 @@ export function mountStructureView(container, ctx) {
   return {
     update(route) {
       const id = route.params.node;
+      if (id && !store.has('structureNodes', id)) {
+        // A bookmark to a group that is gone: say so, show nothing selected.
+        ctx.toast.info(t('mm.nodeGone'));
+        ctx.router.setParams({ node: null });
+        select(null);
+        return;
+      }
       if (id && store.has('structureNodes', id)) {
         const entry = selectors.structureTree().byId.get(id);
         if (entry) for (const p of entry.path.slice(0, -1)) expanded.add(p);

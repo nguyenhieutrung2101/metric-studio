@@ -7,6 +7,7 @@ import { pageHeader } from '../../ui/workspace/page-header.js';
 import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
 import { createInsightsPanel, insightRow, insightSection } from '../../ui/workspace/insights-panel.js';
 import { filterBar } from '../../ui/filter/filter-bar.js';
+import { writeFilters, readFilters, filtersDiffer } from '../../ui/workspace/route-state.js';
 
 const SEVERITIES = ['error', 'warning', 'info'];
 const ENTITY_TYPES = ['metric', 'binding', 'structure', 'dimension', 'member', 'metricDimension', 'metricStructure'];
@@ -45,8 +46,9 @@ export function mountQualityView(container, ctx) {
   }
 
   // ---------------------------------------------------------------- filters
+  const FILTER_SPEC = { severity: {}, entity: {}, rule: {}, scenario: {} };
   const filters = filterBar({
-    search: { placeholder: t('warnings.searchPlaceholder'), onChange: (q) => { state.query = q; refresh(); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
+    search: { placeholder: t('warnings.searchPlaceholder'), onChange: (q) => { state.query = q; ctx.router.setParams({ q: q || null }); refresh(); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
     filters: [
       { key: 'severity', label: t('quality.filter.severity'), options: SEVERITIES.map((s) => ({ value: s, label: t(`severity.${s}`) })) },
       { key: 'entity', label: t('quality.filter.entity'), options: ENTITY_TYPES.map((e) => ({ value: e, label: t(`entity.${e}`) })) },
@@ -54,7 +56,7 @@ export function mountQualityView(container, ctx) {
       { key: 'scenario', label: t('quality.filter.scenario'), options: () => selectors.scenarios().map((s) => ({ value: s.id, label: s.code })) },
     ],
     extra: [h('span', { class: 'muted small list-hint', text: t('quality.hint') })],
-    onChange: (values) => { state.filters = values; refresh(); renderKpis(); },
+    onChange: (values) => { state.filters = values; writeFilters(ctx.router, values, FILTER_SPEC); refresh(); renderKpis(); },
   });
 
   // ---------------------------------------------------------------- grid
@@ -120,7 +122,26 @@ export function mountQualityView(container, ctx) {
   function select(id) {
     state.selectedId = id && state.items.some((i) => i.id === id) ? id : null;
     list.setSelected(state.selectedId);
+    ctx.router.setParams({ issue: state.selectedId });
     renderInsights();
+  }
+
+  /**
+   * A link to one issue (an overview row, a bookmark) selects and reveals
+   * it. If the filters hide it they are cleared; if it is no longer
+   * reported, the page says so instead of showing an unrelated list.
+   */
+  function reveal(issueId) {
+    const all = ctx.validation.index.issues;
+    if (!all.some((i) => i.id === issueId)) {
+      ctx.toast.info(t('quality.issueGone'));
+      ctx.router.setParams({ issue: null });
+      return;
+    }
+    if (!state.items.some((i) => i.id === issueId)) filters.reset();
+    select(issueId);
+    const idx = state.items.findIndex((i) => i.id === issueId);
+    if (idx >= 0) list.scrollToIndex(idx);
   }
 
   function renderInsights() {
@@ -185,10 +206,18 @@ export function mountQualityView(container, ctx) {
 
   return {
     update(route) {
-      const sev = route.params.severity;
-      if (sev && SEVERITIES.includes(sev) && state.filters.severity !== sev) filters.set('severity', sev);
+      const p = route.params;
+      const wanted = readFilters(p, FILTER_SPEC);
+      if (wanted.severity && !SEVERITIES.includes(wanted.severity)) wanted.severity = '';
+      if (filtersDiffer(state.filters, wanted, FILTER_SPEC)) filters.setMany(wanted);
+      if ((p.q || '') !== state.query) filters.setSearch(p.q || '');
+      if (p.issue && p.issue !== state.selectedId) reveal(p.issue);
     },
     onShow() { list.refresh(); },
+    onHide() {},
+    onShortcut(e) {
+      if (e.key === '/') { e.preventDefault(); filters.searchInput.focus(); filters.searchInput.select(); }
+    },
     onDrawerClosed() {},
     onMetricOpened() {},
     destroy() { offValidation(); list.destroy(); layout.el.remove(); },

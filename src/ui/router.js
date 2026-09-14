@@ -4,6 +4,7 @@
  */
 export function createRouter({ defaultPath = 'metrics' } = {}) {
   const handlers = new Set();
+  const paramHandlers = new Set();
   let current = parse(location.hash, defaultPath);
   let previous = null;
 
@@ -61,6 +62,12 @@ export function createRouter({ defaultPath = 'metrics' } = {}) {
       if (next === location.hash) return;
       history.replaceState(null, '', next);
       current = parse(location.hash, defaultPath);
+      for (const fn of [...paramHandlers]) fn(current);
+    },
+    /** Called after setParams: what a view did to its own route, for whoever remembers routes. */
+    onParams(fn) {
+      paramHandlers.add(fn);
+      return () => paramHandlers.delete(fn);
     },
     /**
      * Put the URL back where it was before the last change, without telling
