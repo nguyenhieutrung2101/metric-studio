@@ -203,6 +203,8 @@ span.stat { cursor: default; }
 .tree-icon { color: var(--text-3); flex: none; }
 .tree-row.selected .tree-icon { color: var(--accent); }
 .tree-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-code { flex: none; font-size: var(--fs-xs); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-level { flex: none; font-size: var(--fs-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tree-count { flex: none; font-size: var(--fs-xs); color: var(--text-3); padding: 0 6px; border-radius: 9px; background: var(--surface-2); min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }
 .tree-count:empty { display: none; }
 .tree-count.warn { color: var(--warning); background: var(--warning-soft); }

@@ -24,6 +24,7 @@ import { mountMetricMasterView } from './features/metric-master/metric-master-vi
 import { mountBindingsView } from './features/bindings/bindings-view.js';
 import { mountDependencyView } from './features/dependency/dependency-view.js';
 import { mountDimensionsView } from './features/dimensions/dimensions-view.js';
+import { mountStructureView } from './features/structure/structure-view.js';
 import { mountMasterDataView } from './features/master-data/master-data-view.js';
 import { mountImportExportView } from './features/import-export/import-export-view.js';
 import { mountWarningsView } from './features/warnings/warnings-view.js';
@@ -35,7 +36,7 @@ import { mountWarningsView } from './features/warnings/warnings-view.js';
  */
 const GROUPS = [
   { id: 'catalogue', pages: ['metrics'] },
-  { id: 'structure', pages: ['dimensions'] },
+  { id: 'structure', pages: ['structure', 'dimensions'] },
   { id: 'logic', pages: ['bindings', 'dependencies'] },
   { id: 'quality', pages: ['warnings'] },
 ];
@@ -44,6 +45,7 @@ const VIEWS = {
   metrics: mountMetricMasterView,
   bindings: mountBindingsView,
   dependencies: mountDependencyView,
+  structure: mountStructureView,
   dimensions: mountDimensionsView,
   'master-data': mountMasterDataView,
   backup: mountImportExportView,

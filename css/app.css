@@ -160,6 +160,11 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .ws-body.has-side.has-insights { grid-template-columns: var(--tree-w) minmax(0, 1fr) auto; }
 .ws-body > .pane { border-right: 1px solid var(--border); }
 .ws-body > .pane:last-child { border-right: none; }
+/* Hierarchy workspaces: the tree is the main pane, so give rows room to breathe and cap the line length. */
+.hierarchy-pane .hierarchy-scroll { padding: 6px 10px 16px; }
+.hierarchy-pane .tree { max-width: 720px; }
+.hierarchy-pane .empty.small { padding: 40px 16px; }
+.dims-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px 12px; }
 
 /* insights panel */
 .insights { position: relative; display: flex; flex-direction: column; width: var(--insights-w); min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }
