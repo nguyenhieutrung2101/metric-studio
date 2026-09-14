@@ -110,10 +110,31 @@ export class MetricDrawer {
 
   _focus(focusSection, scenarioId) {
     if (scenarioId) this._selectScenario(scenarioId);
-    if (focusSection && this.sections[focusSection]) {
+    const target = focusSection && this.sections[focusSection] ? focusSection : 'definition';
+    const opened = Object.values(this.sections).some((sec) => sec.isOpen());
+    if (!opened) {
+      // Fresh drawer: open the one section the caller asked for, fold the rest.
+      for (const [name, sec] of Object.entries(this.sections)) sec.setOpen(name === target);
+    } else if (focusSection && this.sections[focusSection]) {
       this.sections[focusSection].setOpen(true);
+    }
+    if (focusSection && this.sections[focusSection]) {
       setTimeout(() => this.sections[focusSection].el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 50);
     }
+    this._refreshSectionBadges();
+  }
+
+  /** Counts on folded sections, so a folded section still says what is inside. */
+  _refreshSectionBadges() {
+    const { selectors, store } = this.ctx;
+    const id = this.metricId;
+    if (!id || !this.sections.structure) return;
+    const placements = selectors.placementsByMetric(id).filter((p) => store.has('structureNodes', p.structureNodeId)).length;
+    const dims = selectors.metricDimensions(id).length;
+    const bound = selectors.scenarios().filter((s) => selectors.coverageOf(id)[s.id]).length;
+    this.sections.structure.setBadge(placements || '');
+    this.sections.dimensions.setBadge(dims || '');
+    this.sections.bindings.setBadge(bound ? `${bound}/${selectors.scenarios().length}` : '');
   }
 
   // ------------------------------------------------------------ build
@@ -126,10 +147,13 @@ export class MetricDrawer {
     this.els.warnings = h('div', { class: 'drawer-warnings' });
     this.els.conflict = h('div', { class: 'conflict-banner', hidden: true });
 
-    this.sections.definition = section({ title: t('drawer.section.definition'), open: true });
-    this.sections.structure = section({ title: t('drawer.section.structure'), open: true });
-    this.sections.dimensions = section({ title: t('drawer.section.dimensions'), open: true });
-    this.sections.bindings = section({ title: t('drawer.section.bindings'), open: true });
+    // One section open at a time by default — the one the user came for.
+    // The rest are a click away and keep their badges, so nothing is hidden,
+    // only folded. Which one opens is decided in _focus().
+    this.sections.definition = section({ title: t('drawer.section.definition'), open: false });
+    this.sections.structure = section({ title: t('drawer.section.structure'), open: false });
+    this.sections.dimensions = section({ title: t('drawer.section.dimensions'), open: false });
+    this.sections.bindings = section({ title: t('drawer.section.bindings'), open: false });
     this.sections.advanced = section({ title: t('drawer.section.advanced'), open: false });
 
     this.els.content = h('div', { class: 'drawer-content' }, this.els.conflict, this.els.warnings, this.sections.definition.el, this.sections.structure.el, this.sections.dimensions.el, this.sections.bindings.el, this.sections.advanced.el);

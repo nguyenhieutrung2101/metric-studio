@@ -51,10 +51,35 @@
   --dur-slow: 240ms;
 
   --topbar-h: 46px;
+  --subnav-h: 34px;
   --drawer-w: 540px;
   --tree-w: 272px;
   --side-w: 320px;
+  --insights-w: 320px;
+
+  /* Type scale: one size per role, so hierarchy comes from role, not from
+     whatever a view happened to pick. */
+  --fs-page-title: 18px;
+  --fs-section: 13px;
+  --fs-grid-head: 11px;
+  --fs-grid: 13px;
+  --fs-meta: 11px;
+
+  /* Density. "Comfortable" is the default; "compact" is for the people who
+     live in a 5,000-row grid all day. Every row and control reads these. */
   --row-h: 40px;
+  --row-h-dense: 36px;
+  --control-h: 30px;
+  --control-h-sm: 28px;
+  --pane-head-h: 40px;
+}
+html[data-density="compact"] {
+  --row-h: 32px;
+  --row-h-dense: 30px;
+  --control-h: 28px;
+  --control-h-sm: 26px;
+  --pane-head-h: 36px;
+  --fs-grid: 12px;
 }
 
 @media (prefers-reduced-motion: reduce) {

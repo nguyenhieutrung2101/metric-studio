@@ -18,7 +18,7 @@
 /* ---------- buttons ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  height: 30px; padding: 0 11px; border-radius: var(--radius);
+  height: var(--control-h); padding: 0 11px; border-radius: var(--radius);
   border: 1px solid var(--border-strong); background: var(--surface); color: var(--text);
   font-weight: 500; cursor: pointer; white-space: nowrap; user-select: none;
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease), transform var(--dur) var(--ease);
@@ -34,14 +34,14 @@
 .btn-danger:hover { filter: brightness(0.95); }
 .btn-danger-ghost { color: var(--danger); border-color: var(--border-strong); }
 .btn-danger-ghost:hover { background: var(--danger-soft); border-color: var(--danger); }
-.btn-sm { height: 26px; padding: 0 8px; font-size: var(--fs-sm); }
-.btn-icon { width: 30px; padding: 0; }
-.btn-icon.btn-sm { width: 26px; }
+.btn-sm { height: calc(var(--control-h-sm) - 2px); padding: 0 8px; font-size: var(--fs-sm); }
+.btn-icon { width: var(--control-h); padding: 0; }
+.btn-icon.btn-sm { width: calc(var(--control-h-sm) - 2px); }
 .btn-ghost { border-color: transparent; background: transparent; }
 
 /* ---------- inputs ---------- */
 .input {
-  width: 100%; height: 30px; padding: 0 9px; border: 1px solid var(--border-strong); border-radius: var(--radius);
+  width: 100%; height: var(--control-h); padding: 0 9px; border: 1px solid var(--border-strong); border-radius: var(--radius);
   background: var(--surface); color: var(--text);
   transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
 }
@@ -49,7 +49,7 @@
 .input:disabled { background: var(--surface-2); color: var(--text-3); }
 textarea.input { height: auto; padding: 6px 9px; resize: vertical; min-height: 60px; line-height: 1.45; }
 select.input { appearance: none; -webkit-appearance: none; padding-right: 26px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%2357606a' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 9px center; cursor: pointer; }
-.input-sm { height: 28px; font-size: var(--fs-sm); width: auto; }
+.input-sm { height: var(--control-h-sm); font-size: var(--fs-sm); width: auto; }
 .input-xs { height: 24px; width: 54px; padding: 0 6px; font-size: var(--fs-xs); }
 input[type="search"].input::-webkit-search-cancel-button { -webkit-appearance: none; }
 input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margin: 0; }
@@ -73,7 +73,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 
 /* segmented control */
 .seg { display: inline-flex; border: 1px solid var(--border-strong); border-radius: var(--radius); overflow: hidden; background: var(--surface); }
-.seg-btn { height: 28px; padding: 0 10px; border: none; border-right: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; font-size: var(--fs-sm); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
+.seg-btn { height: calc(var(--control-h-sm) - 2px); padding: 0 10px; border: none; border-right: 1px solid var(--border); background: transparent; color: var(--text-2); cursor: pointer; font-size: var(--fs-sm); font-weight: 500; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; transition: background var(--dur) var(--ease), color var(--dur) var(--ease); }
 .seg-btn:last-child { border-right: none; }
 .seg-btn:hover { background: var(--surface-2); color: var(--text); }
 .seg-btn.active { background: var(--accent-soft); color: var(--accent); }
@@ -112,7 +112,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .crumb.last { color: var(--text); font-weight: 600; cursor: default; }
 .crumb-sep { color: var(--text-3); }
 .count-label { margin-left: auto; white-space: nowrap; }
-.table-head { flex: none; display: grid; align-items: center; height: 30px; padding: 0 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.table-head { flex: none; display: grid; align-items: center; height: 30px; font-size: var(--fs-grid-head); padding: 0 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .table-head .col-name { flex-direction: row; justify-content: flex-start; }
 .th { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; }
 .th:hover { color: var(--text); }
@@ -123,7 +123,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .vlist-rows { position: absolute; top: 0; left: 0; right: 0; }
 .row { position: absolute; left: 0; right: 0; display: grid; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--border); cursor: pointer; background: var(--surface); transition: background var(--dur) var(--ease); }
 .row:hover { background: var(--surface-2); }
-.row.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.row { font-size: var(--fs-grid); }
+/* selected = the row the inspector shows; active = the record open in the
+   editor. Both can be true; the editor mark is the stronger one. */
+.row.selected { background: var(--accent-soft); }
+.row.selected:hover { background: var(--accent-soft); }
+.row.active { box-shadow: inset 3px 0 0 var(--accent); }
+.row.selected.active { background: var(--accent-soft); }
+.vlist:focus-visible .row.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
 .row.dragging { opacity: 0.5; }
 .row.status-draft .name-text { color: var(--text-2); }
 .row.status-deprecated .name-text { color: var(--text-3); text-decoration: line-through; }

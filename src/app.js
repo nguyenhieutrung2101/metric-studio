@@ -18,6 +18,7 @@ import { createToast } from './ui/toast/toast.js';
 import { createDrawer } from './ui/drawer/drawer.js';
 import { openMenu } from './ui/components/menu.js';
 import { debounce } from './utils/debounce.js';
+import { DENSITIES, getDensity, setDensity, applyDensity } from './ui/density.js';
 import { MetricDrawer } from './features/metric-master/metric-drawer.js';
 import { mountMetricMasterView } from './features/metric-master/metric-master-view.js';
 import { mountBindingsView } from './features/bindings/bindings-view.js';
@@ -27,8 +28,18 @@ import { mountMasterDataView } from './features/master-data/master-data-view.js'
 import { mountImportExportView } from './features/import-export/import-export-view.js';
 import { mountWarningsView } from './features/warnings/warnings-view.js';
 
-const PRIMARY = ['metrics', 'bindings', 'dependencies'];
-const SECONDARY = ['dimensions', 'master-data', 'backup'];
+/**
+ * Navigation follows the work — define, organise, connect, validate — not
+ * the collections underneath. Each group is one top-bar entry; a group with
+ * several pages gets a second row of tabs under the top bar.
+ */
+const GROUPS = [
+  { id: 'catalogue', pages: ['metrics'] },
+  { id: 'structure', pages: ['dimensions'] },
+  { id: 'logic', pages: ['bindings', 'dependencies'] },
+  { id: 'quality', pages: ['warnings'] },
+];
+const SECONDARY = ['master-data', 'backup'];
 const VIEWS = {
   metrics: mountMetricMasterView,
   bindings: mountBindingsView,
@@ -38,6 +49,7 @@ const VIEWS = {
   backup: mountImportExportView,
   warnings: mountWarningsView,
 };
+const groupOf = (path) => GROUPS.find((g) => g.pages.includes(path)) || null;
 
 /**
  * Bootstrap: repository → store → services → validation → shell → router → view.
@@ -45,6 +57,7 @@ const VIEWS = {
  * to move persistence; nothing below the next line knows about storage.
  */
 export async function start(rootEl) {
+  applyDensity();
   const repo = new LocalRepository();
   await repo.init();
   const startupInfo = repo.describe();
@@ -174,7 +187,10 @@ export async function start(rootEl) {
   shell.warningsBtn.addEventListener('click', () => router.navigate('warnings'));
   shell.moreBtn.addEventListener('click', (e) => {
     openMenu(e.currentTarget, [
-      ...SECONDARY.map((p) => ({ label: t(`nav.${p}`), icon: p === 'dimensions' ? 'layers' : p === 'backup' ? 'download' : 'edit', active: active.path === p, onClick: () => router.navigate(p) })),
+      ...SECONDARY.map((p) => ({ label: t(`nav.${p}`), icon: p === 'backup' ? 'download' : 'edit', active: active.path === p, onClick: () => router.navigate(p, lastRoute.get(p) || {}) })),
+      { separator: true },
+      { heading: t('nav.density') },
+      ...DENSITIES.map((d) => ({ label: t(`density.${d}`), active: getDensity() === d, onClick: () => setDensity(d) })),
       { separator: true },
       { heading: t('nav.language') },
       ...LANGUAGES.map((l) => ({ label: l.label, active: getLanguage() === l.code, onClick: () => setLanguage(l.code) })),
@@ -262,6 +278,7 @@ function describeIssue(issue) {
 function buildShell(rootEl) {
   const brand = h('div', { class: 'brand' }, icon('layers', { size: 18 }), h('span', { text: 'Metric Studio' }));
   const navEl = h('nav', { class: 'primary-nav', 'aria-label': 'Primary' });
+  const subnav = h('nav', { class: 'subnav', 'aria-label': 'Section', hidden: true });
   const warnCount = h('span', { class: 'badge', text: '0' });
   const warningsBtn = h('button', { type: 'button', class: 'topbar-btn warnings-btn', title: t('nav.warnings') }, icon('warning'), warnCount);
   const moreBtn = h('button', { type: 'button', class: 'topbar-btn', title: t('nav.more') }, h('span', { text: t('nav.more') }), icon('chevronDown', { size: 14 }));
@@ -269,29 +286,42 @@ function buildShell(rootEl) {
   const viewHost = h('main', { class: 'view', id: 'view' });
   const drawerHost = h('div', { class: 'drawer-host' });
   const toastHost = h('div', { class: 'toast-host' });
-  rootEl.replaceChildren(topbar, viewHost, drawerHost, toastHost);
+  rootEl.replaceChildren(topbar, subnav, viewHost, drawerHost, toastHost);
   const links = new Map();
+  let navigateTo = null;
+  const go = (p) => (e) => {
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    if (navigateTo) navigateTo(p);
+  };
   return {
     viewHost, drawerHost, toastHost, warningsBtn, moreBtn,
     nav(router, rememberedParams) {
+      navigateTo = (p) => router.navigate(p, rememberedParams(p));
       clear(navEl);
-      for (const p of PRIMARY) {
-        const a = h('a', { class: 'nav-link', href: router.build(p), text: t(`nav.${p}`), on: { click: (e) => {
-          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-          e.preventDefault();
-          router.navigate(p, rememberedParams(p));
-        } } });
-        links.set(p, a);
+      for (const g of GROUPS) {
+        const first = g.pages[0];
+        const a = h('a', { class: 'nav-link', href: router.build(first), text: t(`group.${g.id}`), dataset: { group: g.id }, on: { click: go(first) } });
+        links.set(g.id, a);
         navEl.appendChild(a);
       }
     },
     setActive(path) {
-      for (const [p, a] of links) {
-        const on = p === path;
+      const group = groupOf(path);
+      for (const [id, a] of links) {
+        const on = group && group.id === id;
         a.classList.toggle('active', on);
         if (on) a.setAttribute('aria-current', 'page');
         else a.removeAttribute('aria-current');
       }
+      // The second row exists only for groups with more than one page, and
+      // remembers each page's last route like the top row does.
+      clear(subnav);
+      if (group && group.pages.length > 1) {
+        for (const p of group.pages) subnav.appendChild(h('a', { class: ['subnav-link', p === path && 'active'], href: `#/${p}`, text: t(`nav.${p}`), on: { click: go(p) } }));
+        subnav.hidden = false;
+      } else subnav.hidden = true;
+      rootEl.classList.toggle('has-subnav', !subnav.hidden);
       moreBtn.classList.toggle('active', SECONDARY.includes(path));
       warningsBtn.classList.toggle('active', path === 'warnings');
     },
