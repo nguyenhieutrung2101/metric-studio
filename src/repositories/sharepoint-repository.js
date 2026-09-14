@@ -45,8 +45,14 @@ import { Repository, NotImplementedError, COLLECTIONS } from './repository.js';
  * Write consistency: SharePoint does NOT roll back a failed multi-item
  * request, and our cascades span four different lists, where cross-list
  * atomicity was never on offer in the first place. This adapter must
- * therefore report `describe().atomicBatch === false` and apply `plan.ops` in
- * the order given. Services already queue dependent records before the record
+ * therefore report `describe().atomicBatch === false`, apply `plan.ops` in
+ * the order given, and when it stops halfway throw `PartialBatchError`
+ * ({ completed, failed, unknown }) — never a plain error — so the unit of
+ * work can re-read every touched item and put the store back in step. Its
+ * `get()` must read the list, not a cache, for that reconciliation to mean
+ * anything; a lost response goes in `unknown`, not in `failed`. 429/503
+ * need Retry-After backoff, 401/403 an explicit error, and a `writable`
+ * status that turns false while the site is unreachable. Services already queue dependent records before the record
  * they depend on, and mark those removals optional, so a partial failure
  * leaves a retryable state rather than orphan records; whatever does slip
  * through is caught by the existing orphan rules in the validation service.

@@ -40,16 +40,21 @@ export function openMenu(anchor, items, { align = 'end' } = {}) {
   const first = menu.querySelector('.menu-item:not([disabled])');
   if (first) first.focus();
   const stop = dismissOn(menu, close);
+  if (anchor && anchor.setAttribute) anchor.setAttribute('aria-expanded', 'true');
   menu.addEventListener('keydown', (e) => {
     const items = [...menu.querySelectorAll('.menu-item:not([disabled])')];
     const i = items.indexOf(document.activeElement);
     if (e.key === 'ArrowDown') { e.preventDefault(); (items[i + 1] || items[0]).focus(); }
     if (e.key === 'ArrowUp') { e.preventDefault(); (items[i - 1] || items[items.length - 1]).focus(); }
   });
-  function close() {
+  function close(reason = null) {
     stop();
     menu.remove();
     openMenus.delete(close);
+    if (anchor && anchor.setAttribute) anchor.setAttribute('aria-expanded', 'false');
+    // Escape returns focus to what opened the menu; choosing an item or
+    // clicking away does not.
+    if (reason === 'escape' && anchor && typeof anchor.focus === 'function') anchor.focus();
   }
   openMenus.add(close);
   return close;

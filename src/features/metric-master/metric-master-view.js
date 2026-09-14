@@ -209,7 +209,19 @@ export function mountMetricMasterView(container, ctx) {
     h('span', { class: 'col-dims', text: t('mm.col.dims'), title: t('mm.col.dimsTitle') }),
     h('span', { class: 'col-warn', text: '' }),
   );
-  const empty = h('div', { class: 'empty', hidden: true }, icon('search', { size: 28 }), h('p', { text: t('mm.empty') }), btn(t('mm.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => newMetric() } }));
+  // One empty state, three meanings: no data at all, nothing in this scope,
+  // or nothing left after the filters — each with the action that fits.
+  const emptyText = h('p', { text: t('mm.empty') });
+  const emptyNew = btn(t('mm.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => newMetric() } });
+  const emptyClear = btn(t('filters.clear'), { size: 'sm', on: { click: () => filters.reset() } });
+  const empty = h('div', { class: 'empty', hidden: true }, icon('search', { size: 28 }), emptyText, h('div', { class: 'btn-row' }, emptyNew, emptyClear));
+  function renderEmpty() {
+    if (state.items.length) return;
+    const filtered = !!state.query || Object.values(state.filters).some((v) => v && v !== '');
+    if (store.count('metrics') === 0) { emptyText.textContent = t('mm.noData'); emptyClear.hidden = true; emptyNew.hidden = false; }
+    else if (filtered) { emptyText.textContent = t('mm.noResults'); emptyClear.hidden = false; emptyNew.hidden = true; }
+    else { emptyText.textContent = t('mm.emptyScope'); emptyClear.hidden = true; emptyNew.hidden = false; }
+  }
   const listHost = h('div', { class: 'list-host' });
   const main = h('section', { class: 'pane list-pane' }, h('div', { class: 'list-meta' }, crumbs, h('span', { class: 'muted small list-hint', text: t('mm.rowHint') })), listHost, empty);
 
@@ -316,6 +328,7 @@ export function mountMetricMasterView(container, ctx) {
   function refreshList({ keepScroll = true } = {}) {
     state.items = computeItems();
     list.setItems(state.items, { keepScroll });
+    renderEmpty();
     renderMeta();
     if (state.selectedId && !state.items.some((m) => m.id === state.selectedId)) select(null);
   }

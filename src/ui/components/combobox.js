@@ -1,4 +1,4 @@
-import { h, icon, dismissOn } from '../dom.js';
+import { h, icon, dismissOn, placePopover } from '../dom.js';
 import { t } from '../i18n.js';
 
 /**
@@ -6,8 +6,9 @@ import { t } from '../i18n.js';
  * combobox({ placeholder, search(query) → items[{ id, label, sub, meta }], onSelect(item), renderItem?, minChars })
  */
 export function combobox({ placeholder = '', search, onSelect, minChars = 0, autofocus = false, value = '', className = '', emptyText = null, allowCreate = null }) {
-  const input = h('input', { type: 'text', class: 'input combo-input', placeholder, autocomplete: 'off', spellcheck: false, value });
-  const list = h('div', { class: 'combo-list', role: 'listbox' });
+  const listId = `combo-list-${Math.random().toString(36).slice(2, 8)}`;
+  const input = h('input', { type: 'text', class: 'input combo-input', placeholder, autocomplete: 'off', spellcheck: false, value, role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': listId });
+  const list = h('div', { class: 'combo-list', role: 'listbox', id: listId });
   const el = h('div', { class: `combo ${className}`.trim() }, icon('search', { className: 'combo-icon' }), input, list);
   let items = [];
   let active = -1;
@@ -35,8 +36,14 @@ export function combobox({ placeholder = '', search, onSelect, minChars = 0, aut
   }
 
   function markActive() {
-    [...list.children].forEach((c, i) => c.classList.toggle('active', i === active));
+    [...list.children].forEach((c, i) => {
+      c.classList.toggle('active', i === active);
+      c.setAttribute('aria-selected', String(i === active));
+      if (!c.id) c.id = `${listId}-${i}`;
+    });
     const a = list.children[active];
+    if (a) input.setAttribute('aria-activedescendant', a.id);
+    else input.removeAttribute('aria-activedescendant');
     if (a && a.scrollIntoView) a.scrollIntoView({ block: 'nearest' });
   }
 
@@ -57,6 +64,9 @@ export function combobox({ placeholder = '', search, onSelect, minChars = 0, aut
     if (open) return;
     open = true;
     el.classList.add('open');
+    input.setAttribute('aria-expanded', 'true');
+    placePopover(list, input);
+    markActive();
     stop = dismissOn(el, hide);
   }
 
@@ -64,6 +74,8 @@ export function combobox({ placeholder = '', search, onSelect, minChars = 0, aut
     if (!open) return;
     open = false;
     el.classList.remove('open');
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
     if (stop) stop();
     stop = null;
   }

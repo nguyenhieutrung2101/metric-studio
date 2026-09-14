@@ -237,6 +237,9 @@ export const en = {
   'mm.count': '{n} metrics',
   'mm.countFiltered': '{n} of {total} metrics',
   'mm.empty': 'No metrics match. Adjust the filters or create one.',
+  'mm.noData': 'No metrics yet. Create the first one, or import a backup.',
+  'mm.noResults': 'No metrics match the search and filters.',
+  'mm.emptyScope': 'No metrics in this group yet.',
 
   // drawer
   'drawer.metricNotFound': 'Metric not found',
@@ -551,6 +554,7 @@ export const en = {
   'quality.openInMaster': 'Open in Metric Master',
   'quality.openInBindings': 'Open in Bindings',
   'quality.issueGone': 'That issue is no longer reported.',
+  'quality.noResults': 'No issues match these filters ({total} reported in total).',
   'severity.error': 'Error',
   'severity.warning': 'Warning',
   'severity.info': 'Info',

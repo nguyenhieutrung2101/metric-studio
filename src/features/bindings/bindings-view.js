@@ -1,4 +1,4 @@
-import { h, icon, formatNumber } from '../../ui/dom.js';
+import { h, btn, icon, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { VirtualList } from '../../ui/table/virtual-list.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
@@ -128,7 +128,15 @@ export function mountBindingsView(container, ctx) {
 
   // ---------------------------------------------------------------- matrix
   const head = h('div', { class: 'table-head binding-row bmatrix-row' });
-  const empty = h('div', { class: 'empty', hidden: true }, icon('layers', { size: 28 }), h('p', { text: t('bindings.empty') }));
+  const emptyText = h('p', { text: t('bindings.empty') });
+  const emptyClear = btn(t('filters.clear'), { size: 'sm', on: { click: () => { filters.reset(); setCoverage(''); } } });
+  const empty = h('div', { class: 'empty', hidden: true }, icon('layers', { size: 28 }), emptyText, emptyClear);
+  function renderEmpty() {
+    if (state.items.length) return;
+    const filtered = !!state.query || !!state.coverage || Object.values(state.filters).some((v) => v && v !== '');
+    if (store.count('metrics') === 0) { emptyText.textContent = t('mm.noData'); emptyClear.hidden = true; }
+    else { emptyText.textContent = filtered ? t('bindings.empty') : t('mm.emptyScope'); emptyClear.hidden = !filtered; }
+  }
   const listHost = h('div', { class: 'list-host' });
   const main = h('section', { class: 'pane grid-pane' }, listHost, empty);
 
@@ -233,6 +241,7 @@ export function mountBindingsView(container, ctx) {
   function refresh({ keepScroll = true } = {}) {
     state.items = compute();
     list.setItems(state.items, { keepScroll });
+    renderEmpty();
     const total = store.count('metrics');
     countLabel.textContent = state.items.length === total ? t('mm.count', { n: formatNumber(total) }) : t('mm.countFiltered', { n: formatNumber(state.items.length), total: formatNumber(total) });
     if (state.selectedId && !list.itemOf(state.selectedId)) selectCell(null, null);

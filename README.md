@@ -99,14 +99,19 @@ chips), the main grid or tree, and an **Insights** panel on the right.
 * **Inspect frequently, edit intentionally.** A single click selects a row, a
   cell or a node and shows it in Insights without opening anything. Double-click,
   `Enter` or the *Edit* button opens the drawer.
-* The top bar is grouped by the work: **Overview · Catalogue · Structure · Logic
-  · Quality**; groups with several pages get a second row of tabs.
+* The top bar is one row: **Metric Studio · Group ▾ · Page ▾**. The group
+  menu holds Overview · Catalogue · Structure · Logic · Quality and returns
+  you to the page you were last on in that group; the page menu appears only
+  for groups with several pages. Both are keyboard menus (Enter, arrows,
+  Escape), and every entry is a real link you can open in a new tab.
 * `/` focuses search · `Enter` opens the first result · `Esc` closes menus and the drawer · `↑ ↓` move the selection · `← →` walk across scenarios in the Bindings matrix
 * Views keep their state — selection, filters, scroll position, the graph you were looking at — when you switch pages and come back
 * Leaving a metric with unsaved changes, by any route, is refused with *Save all and open* / *Discard and open* on offer
 * `Ctrl/Cmd + S` saves the drawer (metric fields and the open binding tab)
 * Drag a metric row onto a structure group to move it; drag groups and dimension members to reorganise them
 * Click the ⚠ badge for Quality; click an issue to inspect it, double-click to jump to it
+* The URL is the workspace: context, filters, search and selection live in it, so a bookmark, Back/Forward and "back to this page" all mean the same rows; a tile elsewhere opens a page in the context it was counted in
+* A banner above the workspace says where writes are going whenever that is not "saved in this browser": memory only, refused because another tab took over the database, or out of step after a partial write
 * More ▾ holds Master data (units, scenarios), Import / Export, density (comfortable / compact) and the language switch (English / Tiếng Việt)
 
 Saves use optimistic concurrency. If a record was changed elsewhere, the
@@ -148,6 +153,30 @@ drawer shows what changed and offers *Reload latest* or an explicit
   cache of the formula text. An import that arrives with that cache damaged
   rebuilds it from the formula rather than believing it, so a file can never
   quietly turn a calculated metric into one that depends on nothing.
+* **A lost connection refuses writes instead of faking them.** When another
+  tab upgrades the database under this one, saving is switched off, a banner
+  says so, and every write is refused until you reload — nothing is
+  acknowledged into memory as if it had been stored. A session that never had
+  IndexedDB (private mode) keeps working in memory and says so too.
+* **A formula cannot take the app down.** Length, reference count and nesting
+  have budgets; one typed past them is refused with the number, one imported
+  past them loads, is skipped by the graph and reported in Quality, and keeps
+  its text for you to fix.
+* **Hierarchies are guarded where the data lives.** Creating, moving or
+  deleting a dimension member, a dimension or a structure group is checked
+  inside the write transaction against what is actually stored: a parent that
+  another tab deleted, a child it added, two moves that would form a cycle.
+  Manual metric and dimension codes are checked the same way; legacy
+  duplicates already on disk stay editable and are reported, not refused.
+* **A partial write is never hidden.** On a backend that cannot roll back
+  (SharePoint will be one), a batch that stops halfway reports what landed,
+  what failed and what is unknown; the app re-reads every touched record so
+  the screen shows what is stored and a retry starts from fresh tokens. If
+  even that read fails, the affected collections are marked out of step and
+  you are asked to reload.
+* **CSV for Excel is prepared for Excel.** A cell starting with `=`, `+`, `-`
+  or `@` gets a leading apostrophe so it opens as text, and the export page
+  says so. The JSON backup is byte-faithful.
 
 ## Deploy (Cloudflare Workers)
 
@@ -189,10 +218,11 @@ src/repositories/     contract + Memory / IndexedDB adapters, SharePoint skeleto
 src/services/         formula parser, dependency graph, validation, schema boundary, unit of work, CRUD services, backup
 src/features/         overview, metric-master, structure, bindings, dependency, dimensions, quality, master-data, import-export
 src/ui/               dom helpers, i18n, router, density, drawer, virtual list, tree, graph, toast, components
-src/ui/workspace/     page header, context bar, insights panel, workspace layout — the grammar every page shares
+src/ui/nav/           navigation registry (groups, pages, aliases) + disclosure navigation
+src/ui/workspace/     page header, context bar, insights panel, workspace layout, route state — the grammar every page shares
 src/ui/filter/        filter bar + chips · src/ui/hierarchy/  the hierarchy pane Structure and Dimensions share
 src/data/seed.js      demo catalogue + large synthetic dataset
-tests/                node:test suites
+tests/                node:test suites (pure modules + fake-indexeddb); CI runs them on push and pull request
 docs/ARCHITECTURE.md  architecture and decisions
 ```
 

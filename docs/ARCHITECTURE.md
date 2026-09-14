@@ -115,9 +115,10 @@ src/
   ui/
     dom.js                       safe DOM helpers (no innerHTML with user strings)
     i18n.js                      UI strings (en / vi)
-    router.js                    hash router
+    router.js                    hash router (onChange for navigation, onParams for what a view did to its route)
     density.js                   comfortable / compact, applied as html[data-density]
-    workspace/                   page-header, context-bar, insights-panel, workspace-layout
+    nav/                         registry (groups, pages, aliases, labels) + disclosure navigation
+    workspace/                   page-header, context-bar, insights-panel, workspace-layout, route-state
     filter/                      filter-bar ("+ Filters" menu, chips), filter-chip
     hierarchy/                   hierarchy-workspace: the tree pane Structure and Dimensions share
     components/                  chip, confirm dialog, dropdown menu, collapsible section, combobox, chip input, reference picker
@@ -433,6 +434,42 @@ the selectors over the live store and by the boundary over a file being
 imported — otherwise a formula could mean one thing during the import and
 another one after it.
 
+### 4.1e Fail closed, reconcile, or say so
+
+Three rules decide what the store may believe after a write went wrong.
+
+1. **A write the backend did not acknowledge is not mirrored.** A durable
+   connection that was lost — another tab upgraded the database — refuses
+   every write with `StorageUnavailableError` (`describe().writable ===
+   false`, announced through `onStatusChange`). The memory session a person
+   knowingly continues in is a different thing and keeps writing to memory.
+2. **A batch that stopped halfway is reconciled before the error reaches
+   anyone.** An adapter that cannot be atomic (`atomicBatch: false`) throws
+   `PartialBatchError` naming what landed, what failed and what is unknown.
+   `commit()` re-reads every touched record from the backend and mirrors
+   it, so the screen shows what is stored and a retry built from the store
+   starts from fresh tokens instead of conflicting with the half that
+   landed. Such an adapter must answer `get()` from the backend, not a
+   mirror.
+3. **If the reconciling read fails, the store marks itself unsynced**
+   (`store.sync`, event `sync`) for the collections involved until the next
+   hydrate; the shell shows a banner and asks for a reload rather than
+   letting anyone keep editing a state it cannot vouch for.
+
+The same pattern extends to every hierarchy: creating, moving or deleting a
+dimension member, a dimension or a structure group plans inside the
+repository's critical section and carries `requires` (the parent must still
+exist) and `guards` (no child the plan missed, no cycle after the move, no
+duplicate manual code) that the adapter re-runs inside the write
+transaction. A guard that fails with `StaleCascadeError` refreshes the
+mirror with what the database held and the service plans once more.
+
+Formulas have a budget at the boundary (`FORMULA_LIMITS`: length,
+reference count, nesting depth). The parser reports nesting past it as a
+formula error; the graph skips a binding it cannot process and reports it
+(`graphErrors()`, `BINDING_FORMULA_UNPROCESSABLE`); a save past the budget
+is refused with the number. Every AST walk is iterative.
+
 ### 4.2 The schema boundary
 
 Everything entering the app from outside goes through `parseSnapshot`, which
@@ -568,6 +605,39 @@ click away, not a scroll.
 Density (`html[data-density]`, More ▾) switches the row, control and grid
 font tokens; every list reads its row height from the tokens at mount and on
 `density-change`.
+
+### 5.1b The URL is the workspace state
+
+Every page writes its context, filters, search and selection into its route
+(`src/ui/workspace/route-state.js`), and reads them back in `update(route)`.
+Two intents share the one contract:
+
+* **Resume** — the top bar remembers the route each page was last on,
+  including what the page did to it afterwards (`router.onParams`), so a
+  group link brings back the node, the chips and the selected row.
+* **Drill-through** — a tile or a stat elsewhere navigates with explicit
+  params (`?coverage=missing&scenarios=all`, `?status=draft`,
+  `?issue=<id>`, `?node=…&direct=1`, `?node=…&new=1`) that replace whatever
+  was remembered.
+
+A context that stopped existing (a deleted group or dimension) falls back
+and says so; a direct link to a record the filters hide clears them and
+says so. A context change normalises its own filters in the same step:
+"partial" cannot survive a one-scenario context. Keyboard shortcuts are
+dispatched by the shell to the view on screen only, never while typing,
+composing or inside a dialog, menu or navigation list.
+
+### 5.1c Navigation
+
+One row: brand · Group ▾ · Page ▾ · utilities. The registry
+(`src/ui/nav/registry.js`) is the only source of groups, pages, aliases
+(`#/warnings` → `#/quality`) and labels. Both menus are disclosure
+navigations in the W3C APG sense: a button with `aria-expanded` and
+`aria-controls`, a list of real anchors, `aria-current="page"` from the
+router, Enter/Space/ArrowDown to open, arrows to move, Escape to close and
+return focus, Ctrl/Cmd-click for a new tab. Under 720px one Menu button
+carries the whole tree. Nothing above the workspace changes height between
+groups; the drawer lives inside the view.
 
 ### 5.2 Routes
 

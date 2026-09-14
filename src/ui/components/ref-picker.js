@@ -1,4 +1,4 @@
-import { h } from '../dom.js';
+import { h, placePopover } from '../dom.js';
 import { t } from '../i18n.js';
 
 /**
@@ -55,6 +55,8 @@ export function refPicker({ host, search, onPick }) {
     open = true;
     el.hidden = false;
     filter(query);
+    // Near the bottom of the drawer the list opens upward instead of being clipped.
+    placePopover(el, host, { within: host.closest('.drawer-body') });
   }
 
   function close() {

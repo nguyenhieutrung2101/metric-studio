@@ -46,6 +46,8 @@ export class VirtualList {
     container.appendChild(this.viewport);
     if (header) {
       header.classList.add('vlist-header');
+      header.setAttribute('role', 'row');
+      for (const c of header.children) if (!c.getAttribute('role')) c.setAttribute('role', 'columnheader');
       this.headH = resolveHeaderHeight();
       this.viewport.style.setProperty('--vlist-head', `${this.headH}px`);
     }
@@ -94,6 +96,9 @@ export class VirtualList {
   setItems(items, { keepScroll = true } = {}) {
     this.items = items;
     this.spacer.style.height = `${items.length * this.rowHeight}px`;
+    this.viewport.setAttribute('aria-rowcount', String(items.length + (this.header ? 1 : 0)));
+    // An empty grid gives its space to the empty state instead of splitting the pane with it.
+    this.container.classList.toggle('is-empty', items.length === 0);
     if (!keepScroll) this.viewport.scrollTop = 0;
     this._lastRange = [-1, -1];
     this.render(true);
@@ -134,7 +139,14 @@ export class VirtualList {
       el.style.height = `${this.rowHeight}px`;
       el.dataset.index = String(i);
       el.dataset.key = String(key);
-      el.classList.toggle('selected', this.selectedKey != null && String(key) === String(this.selectedKey));
+      const selected = this.selectedKey != null && String(key) === String(this.selectedKey);
+      el.classList.toggle('selected', selected);
+      el.setAttribute('aria-selected', String(selected));
+      el.setAttribute('aria-rowindex', String(i + 1 + (this.header ? 1 : 0)));
+      if (!el.dataset.cells) {
+        for (const c of el.children) if (!c.getAttribute('role')) c.setAttribute('role', 'gridcell');
+        el.dataset.cells = '1';
+      }
       next.set(key, el);
       frag.appendChild(el);
     }
@@ -152,7 +164,11 @@ export class VirtualList {
   /** Mark a row as the selection without re-rendering; notify if asked. */
   setSelected(key, { silent = true } = {}) {
     this.selectedKey = key == null ? null : String(key);
-    for (const [k, el] of this.pool) el.classList.toggle('selected', String(k) === this.selectedKey);
+    for (const [k, el] of this.pool) {
+      const on = String(k) === this.selectedKey;
+      el.classList.toggle('selected', on);
+      el.setAttribute('aria-selected', String(on));
+    }
     if (!silent && this.onSelect) this.onSelect(this.itemOf(key));
   }
 

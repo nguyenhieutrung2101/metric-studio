@@ -61,7 +61,19 @@ export function mountQualityView(container, ctx) {
 
   // ---------------------------------------------------------------- grid
   const head = h('div', { class: 'table-head issue-row' }, h('span', { class: 'col-sev' }), h('span', { class: 'col-entity', text: t('warnings.entity') }), h('span', { class: 'col-msg', text: t('warnings.message') }), h('span', { class: 'col-code', text: t('warnings.rule') }));
-  const empty = h('div', { class: 'empty', hidden: true }, icon('check', { size: 28 }), h('p', { text: t('warnings.empty') }));
+  // "Nothing to report" and "nothing matches these filters" are different
+  // news; the second keeps the total in view and offers to clear.
+  const emptyIcon = h('span', { class: 'empty-icon' }, icon('check', { size: 28 }));
+  const emptyText = h('p', { text: t('warnings.empty') });
+  const emptyClear = btn(t('filters.clear'), { size: 'sm', hidden: true, on: { click: () => filters.reset() } });
+  const empty = h('div', { class: 'empty', hidden: true }, emptyIcon, emptyText, emptyClear);
+  function renderEmpty(total) {
+    if (state.items.length) return;
+    const filtered = total > 0;
+    emptyText.textContent = filtered ? t('quality.noResults', { total: formatNumber(total) }) : t('warnings.empty');
+    emptyClear.hidden = !filtered;
+    emptyIcon.replaceChildren(icon(filtered ? 'search' : 'check', { size: 28 }));
+  }
   const listHost = h('div', { class: 'list-host' });
   const main = h('section', { class: 'pane' }, listHost, empty);
   const list = new VirtualList(listHost, {
@@ -189,6 +201,7 @@ export function mountQualityView(container, ctx) {
         && (!q || normalizeText(`${ctx.describeIssue(i)} ${entityLabel(i)} ${i.code}`).includes(q)))
       .sort((a, b) => RANK[a.severity] - RANK[b.severity] || a.code.localeCompare(b.code) || entityLabel(a).localeCompare(entityLabel(b)));
     list.setItems(state.items);
+    renderEmpty(all.length);
     countLabel.textContent = state.items.length === all.length ? t('quality.issues', { n: formatNumber(all.length) }) : t('quality.issuesFiltered', { n: formatNumber(state.items.length), total: formatNumber(all.length) });
     if (state.selectedId && !state.items.some((i) => i.id === state.selectedId)) state.selectedId = null;
     list.setSelected(state.selectedId);

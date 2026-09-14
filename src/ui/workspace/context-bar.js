@@ -1,4 +1,4 @@
-import { h, icon, dismissOn } from '../dom.js';
+import { h, icon, dismissOn, placePopover } from '../dom.js';
 
 /**
  * Context selectors: "which slice of the world am I working in?"
@@ -29,7 +29,8 @@ export function contextBar(...children) {
  */
 export function contextSelect({ label, value = '', options = null, onChange = null, renderPicker = null, icon: iconName = null, className = '' }) {
   const valueEl = h('span', { class: 'ctx-value', text: value });
-  const button = h('button', { type: 'button', class: ['ctx-select', className], 'aria-haspopup': 'listbox' },
+  const popId = `ctx-pop-${Math.random().toString(36).slice(2, 8)}`;
+  const button = h('button', { type: 'button', class: ['ctx-select', className], 'aria-haspopup': 'listbox', 'aria-expanded': 'false', 'aria-controls': popId },
     iconName && icon(iconName, { size: 14, className: 'ctx-icon' }),
     h('span', { class: 'ctx-label', text: label }),
     valueEl,
@@ -38,18 +39,35 @@ export function contextSelect({ label, value = '', options = null, onChange = nu
   let pop = null;
   let stop = null;
 
-  function close() {
+  function close(reason = null) {
     if (!pop) return;
     pop.remove();
     pop = null;
     if (stop) stop();
     stop = null;
     button.classList.remove('open');
+    button.setAttribute('aria-expanded', 'false');
+    // Escape hands focus back to what opened the list; a click elsewhere does not steal it.
+    if (reason === 'escape') button.focus();
+  }
+
+  /** Everything focusable inside the popover, in order. */
+  function focusables() {
+    return pop ? [...pop.querySelectorAll('button:not([disabled]), input:not([disabled]), a[href]')] : [];
   }
 
   function open() {
     if (pop) { close(); return; }
-    const list = h('div', { class: 'ctx-pop', role: 'listbox' });
+    const list = h('div', { class: 'ctx-pop', role: 'listbox', id: popId, on: {
+      keydown: (e) => {
+        const all = focusables();
+        const i = all.indexOf(document.activeElement);
+        if (e.key === 'ArrowDown') { e.preventDefault(); (all[i + 1] || all[0])?.focus(); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); (all[i - 1] || all[all.length - 1])?.focus(); }
+        else if (e.key === 'Home') { e.preventDefault(); all[0]?.focus(); }
+        else if (e.key === 'End') { e.preventDefault(); all[all.length - 1]?.focus(); }
+      },
+    } });
     if (renderPicker) list.appendChild(renderPicker(close));
     else {
       const items = typeof options === 'function' ? options() : options || [];
@@ -61,7 +79,12 @@ export function contextSelect({ label, value = '', options = null, onChange = nu
     pop = list;
     el.appendChild(list);
     button.classList.add('open');
+    button.setAttribute('aria-expanded', 'true');
+    placePopover(list, button);
     stop = dismissOn(el, close);
+    // Focus lands on the current choice, or the first thing in the list.
+    const cur = list.querySelector('.ctx-option.active') || focusables()[0];
+    if (cur) cur.focus();
   }
 
   let current = null;
@@ -71,5 +94,6 @@ export function contextSelect({ label, value = '', options = null, onChange = nu
   }
 
   button.addEventListener('click', open);
+  button.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && !pop) { e.preventDefault(); open(); } });
   return { el, button, setValue, close, get value() { return current; } };
 }

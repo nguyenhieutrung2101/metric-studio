@@ -144,15 +144,21 @@ export function prefersReducedMotion() {
 }
 
 /** Escape-key + outside-click helper for popovers. */
+/**
+ * Close a floating element on Escape or on a pointer down outside it.
+ * `onDismiss(reason)` says which: 'escape' — the person expects focus back
+ * on what opened it — or 'outside'.
+ */
 export function dismissOn(el, onDismiss, { outside = true } = {}) {
   const onKey = (e) => {
     if (e.key === 'Escape') {
       e.stopPropagation();
-      onDismiss();
+      e.preventDefault();
+      onDismiss('escape');
     }
   };
   const onDown = (e) => {
-    if (outside && !el.contains(e.target)) onDismiss();
+    if (outside && !el.contains(e.target)) onDismiss('outside');
   };
   document.addEventListener('keydown', onKey, true);
   setTimeout(() => document.addEventListener('pointerdown', onDown, true), 0);
@@ -160,6 +166,26 @@ export function dismissOn(el, onDismiss, { outside = true } = {}) {
     document.removeEventListener('keydown', onKey, true);
     document.removeEventListener('pointerdown', onDown, true);
   };
+}
+
+/**
+ * Keep a popover on screen: flip it above its anchor when there is more room
+ * there than below, and cap its height to the room it has. Works for an
+ * absolutely positioned popover under a `position: relative` anchor; the
+ * optional `within` is the scroll container that would clip it (a drawer
+ * body), otherwise the viewport.
+ */
+export function placePopover(pop, anchor, { within = null, margin = 8 } = {}) {
+  const a = anchor.getBoundingClientRect();
+  const boundsTop = within ? within.getBoundingClientRect().top : 0;
+  const boundsBottom = within ? within.getBoundingClientRect().bottom : window.innerHeight;
+  const below = boundsBottom - a.bottom - margin;
+  const above = a.top - boundsTop - margin;
+  const wanted = pop.scrollHeight || pop.offsetHeight;
+  const up = wanted > below && above > below;
+  pop.classList.toggle('up', up);
+  pop.style.setProperty('--pop-max', `${Math.max(120, Math.floor(up ? above : below))}px`);
+  return up;
 }
 
 export function formatNumber(n) {

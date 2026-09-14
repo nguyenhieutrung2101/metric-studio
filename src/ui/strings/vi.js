@@ -237,6 +237,9 @@ export const vi = {
   'mm.count': '{n} chỉ tiêu',
   'mm.countFiltered': '{n} / {total} chỉ tiêu',
   'mm.empty': 'Không có chỉ tiêu phù hợp. Đổi bộ lọc hoặc tạo mới.',
+  'mm.noData': 'Chưa có chỉ tiêu nào. Tạo chỉ tiêu đầu tiên, hoặc nhập bản sao lưu.',
+  'mm.noResults': 'Không có chỉ tiêu nào khớp tìm kiếm và bộ lọc.',
+  'mm.emptyScope': 'Nhóm này chưa có chỉ tiêu nào.',
 
   // drawer
   'drawer.metricNotFound': 'Không tìm thấy chỉ tiêu',
@@ -551,6 +554,7 @@ export const vi = {
   'quality.openInMaster': 'Mở trong Metric Master',
   'quality.openInBindings': 'Mở trong Bindings',
   'quality.issueGone': 'Vấn đề đó không còn được báo cáo.',
+  'quality.noResults': 'Không có vấn đề nào khớp bộ lọc ({total} vấn đề được báo cáo).',
   'severity.error': 'Lỗi',
   'severity.warning': 'Cảnh báo',
   'severity.info': 'Thông tin',

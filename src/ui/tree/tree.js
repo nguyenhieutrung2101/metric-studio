@@ -31,6 +31,11 @@ export class Tree {
     const frag = document.createDocumentFragment();
     for (const entry of roots) this._renderEntry(entry, 0, frag);
     this.el.replaceChildren(frag);
+    // Roving tabindex needs one stop even before anything is selected.
+    if (!this.selectedId || !this.rowsById.has(this.selectedId)) {
+      const first = this.el.querySelector('.tree-row');
+      if (first) first.tabIndex = 0;
+    }
   }
 
   _renderEntry(entry, depth, parent) {

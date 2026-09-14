@@ -1,4 +1,4 @@
-import { h, btn, icon, dismissOn } from '../dom.js';
+import { h, btn, icon, dismissOn, placePopover } from '../dom.js';
 import { t } from '../i18n.js';
 import { filterChip } from './filter-chip.js';
 
@@ -22,7 +22,11 @@ export function filterBar({ search = null, filters = [], onChange = () => {}, pr
   const values = {};
   const searchInput = search ? h('input', { class: 'input search-input', type: 'search', placeholder: search.placeholder || '', 'aria-label': search.placeholder || 'Search' }) : null;
   const chips = h('div', { class: 'filter-chips' });
+  const menuId = `filter-menu-${Math.random().toString(36).slice(2, 8)}`;
   const menuBtn = btn(t('filters.add'), { size: 'sm', icon: 'filter', on: { click: () => openMenu() } });
+  menuBtn.setAttribute('aria-haspopup', 'dialog');
+  menuBtn.setAttribute('aria-expanded', 'false');
+  menuBtn.setAttribute('aria-controls', menuId);
   const menuHost = h('div', { class: 'filter-menu-host' }, menuBtn);
   const el = h('div', { class: 'filter-bar' },
     searchInput && h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), searchInput),
@@ -97,16 +101,18 @@ export function filterBar({ search = null, filters = [], onChange = () => {}, pr
 
   let pop = null;
   let stop = null;
-  function closeMenu() {
+  function closeMenu(reason = null) {
     if (!pop) return;
     pop.remove();
     pop = null;
     if (stop) stop();
     stop = null;
+    menuBtn.setAttribute('aria-expanded', 'false');
+    if (reason === 'escape') menuBtn.focus();
   }
   function openMenu() {
     if (pop) { closeMenu(); return; }
-    pop = h('div', { class: 'filter-menu', role: 'dialog' });
+    pop = h('div', { class: 'filter-menu', role: 'dialog', id: menuId, 'aria-label': t('filters.add') });
     for (const f of filters) {
       if (f.type === 'toggle') {
         const cb = h('input', { type: 'checkbox', checked: !!values[f.key], on: { change: () => set(f.key, cb.checked) } });
@@ -120,7 +126,11 @@ export function filterBar({ search = null, filters = [], onChange = () => {}, pr
     }
     pop.appendChild(h('div', { class: 'filter-menu-foot' }, btn(t('filters.clear'), { size: 'sm', on: { click: () => { reset(); closeMenu(); } } })));
     menuHost.appendChild(pop);
+    menuBtn.setAttribute('aria-expanded', 'true');
+    placePopover(pop, menuBtn);
     stop = dismissOn(menuHost, closeMenu);
+    const first = pop.querySelector('select, input');
+    if (first) first.focus();
   }
 
   for (const f of filters) values[f.key] = f.type === 'toggle' ? false : '';
