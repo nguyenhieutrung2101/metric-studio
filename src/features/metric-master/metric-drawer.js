@@ -78,9 +78,31 @@ export class MetricDrawer {
   }
 
   _isDirty() {
-    if (this.draft && !sameMetric(this.draft, pickMetric(this.base))) return true;
-    for (const b of this.bindingDrafts.values()) if (b.dirty) return true;
-    return false;
+    return this._pending().count > 0;
+  }
+
+  /**
+   * What is unsaved, and where.
+   *
+   * The drawer holds several editors at once — the metric fields and one
+   * draft per scenario — but each Save button covers only its own. Refusing
+   * to navigate without saying which editor is holding the change leaves the
+   * user staring at a panel that looks saved, because it is.
+   */
+  _pending() {
+    const scenarios = [];
+    for (const [scenarioId, b] of this.bindingDrafts) if (b.dirty) scenarios.push(scenarioId);
+    const metric = !!(this.draft && !sameMetric(this.draft, pickMetric(this.base)));
+    return { metric, scenarios, count: (metric ? 1 : 0) + scenarios.length };
+  }
+
+  /** "the metric fields", "the GD binding", "the TT and GD bindings"… */
+  _pendingLabel(pending = this._pending()) {
+    const codes = pending.scenarios.map((id) => this.ctx.store.get('scenarios', id)?.code).filter(Boolean);
+    const parts = [];
+    if (pending.metric) parts.push(t('drawer.pending.metric'));
+    if (codes.length) parts.push(t(codes.length > 1 ? 'drawer.pending.bindings' : 'drawer.pending.binding', { scenarios: codes.join(' · ') }));
+    return parts.join(t('drawer.pending.join'));
   }
 
   _focus(focusSection, scenarioId) {
@@ -492,11 +514,60 @@ export class MetricDrawer {
   }
 
   _openOther(metricId, scenarioId) {
-    if (this._isDirty()) {
-      this.ctx.toast.info(t('drawer.saveFirst'));
+    const pending = this._pending();
+    if (pending.count) {
+      // Point at the editor that is holding things up, then offer both ways
+      // out rather than only the refusal.
+      this._revealPending(pending);
+      this.ctx.toast.info(t('drawer.saveFirstWhat', { what: this._pendingLabel(pending) }), {
+        duration: 8000,
+        actions: [
+          { label: t('drawer.saveAllAndGo'), onClick: async () => {
+            await this.save();
+            if (!this._isDirty()) this.open(metricId, { section: 'bindings', scenarioId });
+          } },
+          { label: t('drawer.discardAndGo'), onClick: () => {
+            this._discardChanges();
+            this.open(metricId, { section: 'bindings', scenarioId });
+          } },
+        ],
+      });
       return;
     }
     this.open(metricId, { section: 'bindings', scenarioId });
+  }
+
+  /** Bring the editor that is holding the unsaved change into view. */
+  _revealPending(pending = this._pending()) {
+    if (pending.scenarios.length) {
+      const scenarioId = pending.scenarios.includes(this.activeScenarioId) ? this.activeScenarioId : pending.scenarios[0];
+      this.sections.bindings.setOpen(true);
+      if (scenarioId !== this.activeScenarioId) this._selectScenario(scenarioId);
+      this.els.tabs?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      const tab = this.els.tabs?.querySelector('.tab.active');
+      if (tab) {
+        tab.classList.remove('flash');
+        void tab.offsetWidth; // restart the animation even on a repeat click
+        tab.classList.add('flash');
+      }
+      return;
+    }
+    if (pending.metric) {
+      this.sections.definition.setOpen(true);
+      this.sections.definition.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    }
+  }
+
+  /** Throw away every unsaved draft in this drawer. */
+  _discardChanges() {
+    this.draft = pickMetric(this.base);
+    for (const scenarioId of [...this.bindingDrafts.keys()]) this.bindingDrafts.delete(scenarioId);
+    this._refreshHeader();
+    this._renderDefinition();
+    this._renderBindingTabs();
+    this._renderBindingPanel();
+    this._renderAdvanced();
+    this._updateDirty();
   }
 
   // ------------------------------------------------------------ advanced
@@ -523,9 +594,15 @@ export class MetricDrawer {
 
   // ------------------------------------------------------------ save / delete
   _updateDirty() {
-    const dirty = this._isDirty();
+    const pending = this._pending();
+    const dirty = pending.count > 0;
     this.els.saveBtn.disabled = !dirty;
     this.els.saveBtn.classList.toggle('pulse', dirty);
+    // Two Save buttons are visible at once and they do not cover the same
+    // thing. The count says which one saves everything.
+    const label = this.els.saveBtn.querySelector('.btn-label') || this.els.saveBtn;
+    label.textContent = pending.count > 1 ? t('drawer.saveAllCount', { n: pending.count }) : t('common.save');
+    this.els.saveBtn.title = dirty ? t('drawer.saveCovers', { what: this._pendingLabel(pending) }) : 'Ctrl+S';
     if (this.els.title) {
       const nameEl = this.els.title.querySelector('.drawer-name');
       if (nameEl && this.draft) nameEl.textContent = this.draft.name || this.base.name;

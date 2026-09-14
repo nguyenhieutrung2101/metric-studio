@@ -136,7 +136,7 @@ export function icon(name, { size = 16, className = '' } = {}) {
 
 /** Button helper: `btn('Save', { kind: 'primary', icon: 'check', on: { click } })` */
 export function btn(label, { kind = '', icon: iconName = null, title = '', on: handlers = {}, disabled = false, className = '', type = 'button', size = '' } = {}) {
-  return h('button', { type, class: ['btn', kind && `btn-${kind}`, size && `btn-${size}`, !label && 'btn-icon', className], title: title || (label ? undefined : iconName), disabled, on: handlers, 'aria-label': label ? undefined : title || iconName }, iconName && icon(iconName), label && h('span', { text: label }));
+  return h('button', { type, class: ['btn', kind && `btn-${kind}`, size && `btn-${size}`, !label && 'btn-icon', className], title: title || (label ? undefined : iconName), disabled, on: handlers, 'aria-label': label ? undefined : title || iconName }, iconName && icon(iconName), label && h('span', { class: 'btn-label', text: label }));
 }
 
 export function prefersReducedMotion() {

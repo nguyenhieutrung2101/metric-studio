@@ -470,3 +470,46 @@ function complete(n) {
   store.hydrate({ metrics, bindings, scenarios: SCENARIOS });
   return { store, selectors };
 }
+
+// ------------------------------------------------------- drawer: what is unsaved
+
+test('the drawer knows which editor is holding an unsaved change', async () => {
+  const { MetricDrawer } = await import('../src/features/metric-master/metric-drawer.js');
+  const ctx = await createContext();
+  // The two methods under test read only drawer state and the store, so they
+  // can be exercised without a DOM; everything else in the drawer cannot.
+  const drawer = Object.create(MetricDrawer.prototype);
+  drawer.ctx = ctx;
+  drawer.base = ctx.store.get('metrics', 'm-revenue');
+  drawer.draft = pickMetricLike(drawer.base);
+  drawer.bindingDrafts = new Map([
+    [TT, { dirty: false }],
+    [GD, { dirty: false }],
+  ]);
+
+  assert.equal(drawer._pending().count, 0, 'nothing touched');
+
+  // Saving the TT binding leaves a pending GD binding: the case where the
+  // panel in front of the user is saved and the drawer still refuses to move.
+  drawer.bindingDrafts.get(GD).dirty = true;
+  let pending = drawer._pending();
+  assert.deepEqual(pending, { metric: false, scenarios: [GD], count: 1 });
+  assert.match(drawer._pendingLabel(pending), /GD/, 'the message names the scenario');
+
+  drawer.draft.definition = 'đổi định nghĩa';
+  drawer.bindingDrafts.get(TT).dirty = true;
+  pending = drawer._pending();
+  assert.equal(pending.count, 3);
+  assert.equal(pending.metric, true);
+  assert.deepEqual(pending.scenarios, [TT, GD]);
+  const label = drawer._pendingLabel(pending);
+  assert.match(label, /TT · GD/, 'both scenarios are named');
+  assert.match(label, /bindings/, 'plural when there are two');
+
+  drawer.bindingDrafts.get(TT).dirty = false;
+  assert.match(drawer._pendingLabel(), /the GD binding/, 'singular when there is one');
+});
+
+function pickMetricLike(m) {
+  return { name: m.name || '', code: m.code || '', aliases: [...(m.aliases || [])], unitId: m.unitId || null, definition: m.definition || '', owner: m.owner || '', role: m.role || '', status: m.status || 'draft', tags: [...(m.tags || [])] };
+}
