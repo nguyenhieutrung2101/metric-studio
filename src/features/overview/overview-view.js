@@ -21,18 +21,21 @@ export function mountOverviewView(container, ctx) {
   const header = pageHeader({
     title: t('nav.overview'),
     subtitle: t('overview.subtitle'),
-    meta: h('span', { class: 'muted small', text: `${t('overview.storage')}: ${ctx.storage.label()}` }),
     actions: [btn(t('overview.action.newMetric'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => go('metrics', { new: 1 }) } })],
   });
   const grid = h('div', { class: 'ov-grid' });
-  const scroll = h('div', { class: 'ov-scroll' }, grid);
+  // Where the data lives is a footnote to the board, not a headline.
+  const foot = h('p', { class: 'ov-foot' });
+  const renderFoot = () => foot.replaceChildren(icon('info', { size: 12 }), h('span', { text: `${t('overview.storage')}: ${ctx.storage.label()}` }));
+  renderFoot();
+  const scroll = h('div', { class: 'ov-scroll' }, grid, foot);
   const el = h('div', { class: 'ws overview-ws' }, header.el, scroll);
   container.appendChild(el);
 
-  function card(title, { link = null, className = '' } = {}, ...children) {
-    return h('section', { class: ['ov-card', className] },
+  function card(title, { link = null, span = 6 } = {}, ...children) {
+    return h('section', { class: ['ov-card', `span-${span}`] },
       h('div', { class: 'ov-card-head' }, h('h2', { class: 'ov-card-title', text: title }), link && h('button', { type: 'button', class: 'link ov-card-link', on: { click: link.onClick } }, link.label)),
-      ...children);
+      h('div', { class: 'ov-card-body' }, ...children));
   }
 
   function tile(value, caption, { className = '', onClick = null } = {}) {
@@ -45,7 +48,7 @@ export function mountOverviewView(container, ctx) {
     const byStatus = {};
     for (const s of METRIC_STATUSES) byStatus[s] = 0;
     for (const m of store.list('metrics')) byStatus[m.status] = (byStatus[m.status] || 0) + 1;
-    return card(t('overview.catalogue'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') }, className: 'two' },
+    return card(t('overview.catalogue'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') }, span: 8 },
       h('div', { class: 'ov-tiles' },
         tile(metrics, t('overview.metrics'), { onClick: () => go('metrics') }),
         tile(store.count('structureNodes'), t('overview.groups'), { onClick: () => go('structure') }),
@@ -62,7 +65,7 @@ export function mountOverviewView(container, ctx) {
     for (const m of store.list('metrics')) counts[selectors.coverageLevel(m.id)] += 1;
     const total = store.count('metrics') || 1;
     const pct = (n) => `${(n / total) * 100}%`;
-    return card(t('overview.coverage'), { link: { label: t('nav.bindings'), onClick: () => go('bindings') } },
+    return card(t('overview.coverage'), { link: { label: t('nav.bindings'), onClick: () => go('bindings') }, span: 4 },
       h('div', { class: 'ov-bar', role: 'img', 'aria-label': t('overview.coverageHint', { complete: counts.complete, total: store.count('metrics') }) },
         h('span', { class: 'complete', style: { width: pct(counts.complete) } }), h('span', { class: 'partial', style: { width: pct(counts.partial) } }), h('span', { class: 'missing', style: { width: pct(counts.missing) } })),
       h('div', { class: 'ov-tiles' },
@@ -71,7 +74,7 @@ export function mountOverviewView(container, ctx) {
         tile(counts.partial, t('overview.partial'), { className: 'kpi-warning', onClick: () => go('bindings', { coverage: 'partial', scenarios: 'all' }) }),
         tile(counts.missing, t('overview.missing'), { className: 'kpi-error', onClick: () => go('bindings', { coverage: 'missing', scenarios: 'all' }) }),
       ),
-      h('p', { class: 'muted small', text: t('overview.coverageHint', { complete: formatNumber(counts.complete), total: formatNumber(store.count('metrics')) }) }),
+      h('p', { class: 'ov-note', text: t('overview.coverageHint', { complete: formatNumber(counts.complete), total: formatNumber(store.count('metrics')) }) }),
     );
   }
 
@@ -89,7 +92,7 @@ export function mountOverviewView(container, ctx) {
     if (unplaced) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { node: 'unplaced' }) } }, icon('folder', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.unplaced', { n: formatNumber(unplaced) }) }), icon('chevronRight', { size: 14 })));
     if (drafts) items.push(h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { status: 'draft' }) } }, icon('edit', { size: 14 }), h('span', { class: 'ellipsis', text: t('overview.drafts', { n: formatNumber(drafts) }) }), icon('chevronRight', { size: 14 })));
     const top = index.issues.filter((i) => i.severity !== 'info').slice(0, 5);
-    return card(t('overview.attention'), { link: { label: t('overview.openQuality'), onClick: () => go('quality') } },
+    return card(t('overview.attention'), { link: { label: t('overview.openQuality'), onClick: () => go('quality') }, span: 6 },
       items.length ? h('ul', { class: 'ov-list' }, items.map((b) => h('li', null, b))) : h('p', { class: ['insight-para', 'insight-ok'], text: t('overview.allClear') }),
       top.length ? h('div', null, h('div', { class: 'insight-heading', text: t('overview.topIssues') }), h('ul', { class: 'ov-list' }, top.map((i) => h('li', null, h('button', { type: 'button', class: 'ov-item', title: ctx.describeIssue(i), on: { click: () => go('quality', { issue: i.id }) } }, severityDot(i.severity), h('span', { class: 'ellipsis', text: ctx.describeIssue(i) })))))) : null,
     );
@@ -97,7 +100,7 @@ export function mountOverviewView(container, ctx) {
 
   function recentCard() {
     const recent = [...store.list('metrics')].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt))).slice(0, 8);
-    return card(t('overview.recent'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') } },
+    return card(t('overview.recent'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') }, span: 6 },
       recent.length
         ? h('ul', { class: 'ov-list' }, recent.map((m) => h('li', null, h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { selected: m.id }) } },
           h('span', { class: 'mono muted', text: m.code }), h('span', { class: 'ellipsis', text: m.name, title: m.name }), statusChip(m.status), h('span', { class: 'when', text: formatDateTime(m.updatedAt, getLanguage()) })))))
@@ -106,9 +109,9 @@ export function mountOverviewView(container, ctx) {
   }
 
   function actionsCard() {
-    return card(t('overview.actions'), { className: 'wide' },
+    // Last on the board, and without the "New metric" the page header already carries.
+    return card(t('overview.actions'), { span: 12 },
       h('div', { class: 'ov-actions' },
-        btn(t('overview.action.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => go('metrics', { new: 1 }) } }),
         btn(t('overview.action.structure'), { size: 'sm', icon: 'folder', on: { click: () => go('structure') } }),
         btn(t('overview.action.bindings'), { size: 'sm', icon: 'link', on: { click: () => go('bindings') } }),
         btn(t('overview.action.dependencies'), { size: 'sm', icon: 'graph', on: { click: () => go('dependencies') } }),
@@ -125,7 +128,7 @@ export function mountOverviewView(container, ctx) {
   const schedule = debounce(render, 60);
   const offStore = store.events.on('change', () => schedule());
   const offValidation = ctx.validation.onChange(() => schedule());
-  const offStorage = ctx.storage.onChange(() => { header.setMeta(h('span', { class: 'muted small', text: `${t('overview.storage')}: ${ctx.storage.label()}` })); });
+  const offStorage = ctx.storage.onChange(renderFoot);
   render();
 
   return {

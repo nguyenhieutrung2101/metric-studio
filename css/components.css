@@ -225,10 +225,12 @@ span.stat { cursor: default; }
 
 /* ---------- tree ---------- */
 .tree { display: flex; flex-direction: column; }
-.tree-row { display: flex; align-items: center; gap: 2px; height: 28px; padding-left: calc(6px + var(--depth, 0) * 18px); padding-right: 4px; border-radius: var(--radius); cursor: pointer; color: var(--text); user-select: none; position: relative; transition: background var(--dur) var(--ease); }
+.tree-row { display: flex; align-items: center; gap: 2px; height: 28px; padding-left: calc(6px + var(--depth, 0) * var(--tree-indent, 20px)); padding-right: 4px; border-radius: var(--radius); cursor: pointer; color: var(--text); user-select: none; position: relative; transition: background var(--dur) var(--ease); }
 /* One faint guide per ancestor level, so a fully expanded tree still reads
    as parents and children rather than as a flat list with odd offsets. */
-.tree-row:not(.pseudo)::before { content: ""; position: absolute; top: 0; bottom: 0; left: 14px; width: calc(var(--depth, 0) * 18px); pointer-events: none; background-image: linear-gradient(to right, var(--border) 1px, transparent 1px); background-size: 18px 100%; background-repeat: repeat-x; }
+/* One guide line per ancestor level, drawn under the toggle column of that
+   level, so a child reads as hanging from its parent. */
+.tree-row:not(.pseudo)::before { content: ""; position: absolute; top: 0; bottom: 0; left: 14px; width: calc(var(--depth, 0) * var(--tree-indent, 20px)); pointer-events: none; background-image: linear-gradient(to right, var(--border-strong) 1px, transparent 1px); background-size: var(--tree-indent, 20px) 100%; background-repeat: repeat-x; }
 .tree-row[style*="--depth: 0"]::before, .tree-row[style*="--depth:0"]::before { display: none; }
 .tree-row[aria-level="1"] .tree-name { font-weight: 600; }
 .tree-group { position: relative; }
@@ -248,6 +250,14 @@ span.stat { cursor: default; }
 .tree-icon { color: var(--text-3); flex: none; }
 .tree-row.selected .tree-icon { color: var(--accent); }
 .tree-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* In a hierarchy workspace the row is the whole pane wide, so the code and
+   the count sit right after the name instead of at the far edge. */
+.hierarchy-pane .tree-name { flex: 0 1 auto; }
+.hierarchy-pane .tree-code { color: var(--text-3); }
+.hierarchy-pane .tree-count { margin-left: 2px; }
+.hierarchy-pane .tree-more { margin-left: auto; }
+.hierarchy-pane .tree-row { height: 32px; }
+.hierarchy-pane .tree-row[aria-level="1"] { margin-top: 2px; }
 .tree-code { flex: none; font-size: var(--fs-xs); max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-level { flex: none; font-size: var(--fs-xs); color: var(--text-3); font-variant-numeric: tabular-nums; }
 .tree-count { flex: none; font-size: var(--fs-xs); color: var(--text-3); padding: 0 6px; border-radius: 9px; background: var(--surface-2); min-width: 20px; text-align: center; font-variant-numeric: tabular-nums; }

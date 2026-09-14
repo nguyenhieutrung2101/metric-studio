@@ -107,7 +107,9 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .card-head .btn, .card-head .tag { margin-left: auto; }
 .counts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .count-pill { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); font-size: var(--fs-xs); color: var(--text-2); }
-.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.card .btn-row + .small { margin-top: 10px; }
+.card > p.small { margin: 0 0 4px; line-height: 1.5; }
 .steps { padding-left: 18px; list-style: decimal; margin: 6px 0 10px; }
 .import-preview { margin-top: 10px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); }
 .error-list li { color: var(--danger); font-size: var(--fs-sm); }
@@ -210,8 +212,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .ws-body.narrow > .pane.tree-pane { display: none; position: absolute; left: 34px; top: 0; bottom: 0; width: var(--tree-w); z-index: 6; box-shadow: var(--shadow-2); border-right: 1px solid var(--border); }
 .ws-body.narrow.side-open > .pane.tree-pane { display: flex; }
 /* Hierarchy workspaces: the tree is the main pane, so give rows room to breathe and cap the line length. */
-.hierarchy-pane .hierarchy-scroll { padding: 6px 10px 16px; }
-.hierarchy-pane .tree { max-width: 720px; }
+.hierarchy-pane .hierarchy-scroll { padding: 8px 12px 16px; }
 .hierarchy-pane .empty.small { padding: 40px 16px; }
 .dims-list { flex: 1; min-height: 0; overflow: auto; padding: 4px 6px 12px; }
 /* Overview: bordered cards on the surface, no shadows; color only where a number means something. */
@@ -219,35 +220,40 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
    ~400px each), no cap, gutter 18px. Card heights follow content; nothing is
    stretched to fill the fold. Column count comes from the container, so a
    drawer or a narrow window changes it, not only the viewport. */
-.ov-scroll { flex: 1; min-height: 0; overflow: auto; padding: 16px 18px 32px; background: var(--bg); container-type: inline-size; }
-.ov-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(400px, 100%), 1fr)); gap: 14px; width: 100%; align-items: start; }
-.ov-card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); min-width: 0; }
-.ov-card.wide { grid-column: 1 / -1; }
-.ov-card.two { grid-column: span 2; }
-@container (max-width: 860px) { .ov-card.two { grid-column: auto; } }
-.ov-card .insight-para, .ov-card .muted { max-width: 70ch; }
+/* Overview board: a 12-column grid with fixed spans, so every row lines up
+   and cards in a row share a height. Catalogue (8) + Coverage (4) on top,
+   Attention (6) + Recent (6) in the middle, Quick actions (12) last. The
+   spans collapse with the container, not the viewport. */
+.ov-scroll { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px 28px; background: var(--bg); container-type: inline-size; }
+.ov-grid { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 16px; width: 100%; align-items: stretch; }
+.ov-card { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--surface); min-width: 0; }
+.ov-card.span-4 { grid-column: span 4; }
+.ov-card.span-6 { grid-column: span 6; }
+.ov-card.span-8 { grid-column: span 8; }
+.ov-card.span-12 { grid-column: 1 / -1; }
+@container (max-width: 1100px) { .ov-card.span-8, .ov-card.span-4 { grid-column: 1 / -1; } }
+@container (max-width: 860px) { .ov-card.span-6 { grid-column: 1 / -1; } }
 .ov-card-head { display: flex; align-items: baseline; gap: 10px; }
 .ov-card-title { font-size: var(--fs-section); font-weight: 600; margin: 0; }
-.ov-card-link { margin-left: auto; font-size: var(--fs-sm); }
-.ov-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
-.ov-tiles .kpi { min-width: 104px; }
+.ov-card-link { margin-left: auto; font-size: var(--fs-sm); white-space: nowrap; }
+.ov-card-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.ov-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(112px, 1fr)); gap: 10px; }
+.ov-tiles .kpi { min-width: 0; }
 .ov-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-3); }
 .ov-bar > span { display: block; height: 100%; }
 .ov-bar .complete { background: var(--success); }
 .ov-bar .partial { background: var(--warning); }
 .ov-bar .missing { background: var(--danger); }
-.ov-legend { display: flex; gap: 14px; font-size: var(--fs-sm); color: var(--text-2); flex-wrap: wrap; }
-.ov-legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
-.ov-legend .swatch.complete { background: var(--success); }
-.ov-legend .swatch.partial { background: var(--warning); }
-.ov-legend .swatch.missing { background: var(--danger); }
 .ov-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.ov-item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; margin: 0 -8px; border-radius: var(--radius); font-size: var(--fs-sm); text-align: left; background: none; border: none; color: inherit; font-family: inherit; cursor: pointer; min-width: 0; width: calc(100% + 16px); }
+.ov-item { display: flex; align-items: center; gap: 8px; min-height: 32px; padding: 3px 8px; margin: 0 -8px; border-radius: var(--radius); font-size: var(--fs-sm); text-align: left; background: none; border: none; color: inherit; font-family: inherit; cursor: pointer; min-width: 0; width: calc(100% + 16px); }
 .ov-item:hover { background: var(--surface-2); }
 .ov-item .ellipsis { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ov-item .when { color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
-.ov-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.ov-item .mono.muted { flex: none; }
+.ov-actions { display: flex; flex-wrap: wrap; gap: 10px; }
 .ov-status { display: flex; flex-wrap: wrap; gap: 6px; }
+.ov-note { font-size: var(--fs-sm); color: var(--text-2); margin: 0; }
+.ov-foot { margin-top: 14px; font-size: var(--fs-xs); color: var(--text-3); display: flex; align-items: center; gap: 6px; }
 
 /* insights panel */
 .insights { position: relative; display: flex; flex-direction: column; width: var(--insights-w); min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }
@@ -292,28 +298,6 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .insight-list .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .insight-para { font-size: var(--fs-sm); line-height: 1.5; color: var(--text); margin: 0; }
 
-.ov-card-head { display: flex; align-items: baseline; gap: 10px; }
-.ov-card-title { font-size: var(--fs-section); font-weight: 600; margin: 0; }
-.ov-card-link { margin-left: auto; font-size: var(--fs-sm); }
-.ov-tiles { display: flex; flex-wrap: wrap; gap: 8px; }
-.ov-tiles .kpi { min-width: 104px; }
-.ov-bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--surface-3); }
-.ov-bar > span { display: block; height: 100%; }
-.ov-bar .complete { background: var(--success); }
-.ov-bar .partial { background: var(--warning); }
-.ov-bar .missing { background: var(--danger); }
-.ov-legend { display: flex; gap: 14px; font-size: var(--fs-sm); color: var(--text-2); flex-wrap: wrap; }
-.ov-legend .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; vertical-align: 0; }
-.ov-legend .swatch.complete { background: var(--success); }
-.ov-legend .swatch.partial { background: var(--warning); }
-.ov-legend .swatch.missing { background: var(--danger); }
-.ov-list { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
-.ov-item { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 3px 8px; margin: 0 -8px; border-radius: var(--radius); font-size: var(--fs-sm); text-align: left; background: none; border: none; color: inherit; font-family: inherit; cursor: pointer; min-width: 0; width: calc(100% + 16px); }
-.ov-item:hover { background: var(--surface-2); }
-.ov-item .ellipsis { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ov-item .when { color: var(--text-3); font-size: var(--fs-xs); white-space: nowrap; }
-.ov-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.ov-status { display: flex; flex-wrap: wrap; gap: 6px; }
 
 /* insights panel */
 .insights { position: relative; display: flex; flex-direction: column; width: var(--insights-w); min-height: 0; border-left: 1px solid var(--border); background: var(--surface); }

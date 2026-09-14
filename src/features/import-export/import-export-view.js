@@ -37,9 +37,11 @@ export function mountImportExportView(container, ctx) {
   const exportCard = h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', { text: t('io.export') })),
     h('p', { class: 'small muted', text: t('io.exportHint') }),
-    btn(t('io.downloadJson'), { kind: 'primary', size: 'sm', icon: 'download', on: { click: exportJson } }),
-    btn(t('io.downloadBindingsCsv'), { size: 'sm', icon: 'download', title: t('io.bindingsCsvHint'), on: { click: () => downloadCsv('bindings', toCsv(bindingRows(store), BINDING_COLUMNS, { spreadsheetSafe: true })) } }),
-    btn(t('io.downloadEdgesCsv'), { size: 'sm', icon: 'download', title: t('io.edgesCsvHint'), on: { click: () => downloadCsv('dependency-edges', toCsv(services.dependencies.referenceRows(), EDGE_COLUMNS, { spreadsheetSafe: true })) } }),
+    h('div', { class: 'btn-row' },
+      btn(t('io.downloadJson'), { kind: 'primary', size: 'sm', icon: 'download', on: { click: exportJson } }),
+      btn(t('io.downloadBindingsCsv'), { size: 'sm', icon: 'download', title: t('io.bindingsCsvHint'), on: { click: () => downloadCsv('bindings', toCsv(bindingRows(store), BINDING_COLUMNS, { spreadsheetSafe: true })) } }),
+      btn(t('io.downloadEdgesCsv'), { size: 'sm', icon: 'download', title: t('io.edgesCsvHint'), on: { click: () => downloadCsv('dependency-edges', toCsv(services.dependencies.referenceRows(), EDGE_COLUMNS, { spreadsheetSafe: true })) } }),
+    ),
     h('p', { class: 'small muted', text: t('io.csvSafeHint') }),
   );
 

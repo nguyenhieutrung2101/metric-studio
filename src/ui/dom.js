@@ -43,7 +43,13 @@ function applyProps(el, props) {
         break;
       case 'style':
         if (typeof v === 'string') el.style.cssText = v;
-        else Object.assign(el.style, v);
+        else {
+          for (const [name, value] of Object.entries(v || {})) {
+            // A custom property (--depth) is only settable through setProperty.
+            if (name.startsWith('--')) el.style.setProperty(name, String(value));
+            else el.style[name] = value;
+          }
+        }
         break;
       case 'attrs':
         for (const [ak, av] of Object.entries(v)) if (av != null && av !== false) el.setAttribute(ak, av === true ? '' : String(av));
