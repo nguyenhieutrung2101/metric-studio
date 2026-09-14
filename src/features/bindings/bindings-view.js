@@ -6,132 +6,279 @@ import { BINDING_TYPES } from '../../core/models/binding.js';
 import { debounce } from '../../utils/debounce.js';
 import { compareText } from '../../utils/text.js';
 import { worstSeverity } from '../../services/validation-service.js';
+import { pageHeader } from '../../ui/workspace/page-header.js';
+import { contextBar, contextSelect } from '../../ui/workspace/context-bar.js';
+import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
+import { createInsightsPanel } from '../../ui/workspace/insights-panel.js';
+import { filterBar } from '../../ui/filter/filter-bar.js';
+import { renderMetricInsights } from '../metric-master/metric-insights.js';
+import { renderBindingInsights } from './binding-insights.js';
+
+const COVERAGE = ['', 'complete', 'partial', 'missing'];
 
 /**
- * Bindings — scenario coverage view.
- * Makes "Metric Master → TT subset → GD subset" obvious: one row per metric,
- * one chip per scenario, filters for TT-only / GD-only / Both / None.
+ * Bindings — the coverage matrix as a worksheet.
+ *
+ * One row per metric, one cell per scenario in context. The context bar
+ * decides which scenarios the matrix is about; the filter bar only hides
+ * rows. A cell is a thing of its own: click to inspect the binding in the
+ * Insights panel, double-click (or Enter) to edit it in the drawer, ← → to
+ * walk across scenarios. Coverage — complete, partial, missing — is judged
+ * over the scenarios in context, so narrowing the context narrows the
+ * question.
  */
 export function mountBindingsView(container, ctx) {
   const { store, selectors } = ctx;
-  const scenarios = selectors.scenarios();
-  const state = { coverage: '', query: '', types: {}, warningsOnly: false, items: [] };
+  const allScenarios = selectors.scenarios();
+  const state = {
+    visible: new Set(allScenarios.map((s) => s.id)),
+    coverage: '',
+    query: '',
+    filters: {},
+    items: [],
+    selectedId: null,
+    scenarioId: null,
+  };
+  const scenarios = () => allScenarios.filter((s) => state.visible.has(s.id));
 
-  const summary = h('div', { class: 'summary-row' });
-  const searchInput = h('input', { class: 'input search-input', type: 'search', placeholder: t('mm.searchPlaceholder') });
-  const segButtons = [];
-  const seg = h('div', { class: 'seg', role: 'radiogroup' }, [{ value: '', label: t('coverage.all') }, { value: 'both', label: t('coverage.both') }, ...scenarios.map((s) => ({ value: `${s.code.toLowerCase()}-only`, label: t('coverage.only', { scenario: s.code }) })), { value: 'none', label: t('coverage.none') }].map((o) => {
-    const b = h('button', { type: 'button', role: 'radio', class: ['seg-btn', o.value === state.coverage && 'active'], 'aria-checked': String(o.value === state.coverage), dataset: { value: o.value }, on: { click: () => { state.coverage = o.value; markSeg(); refresh(); } } }, o.label);
-    segButtons.push(b);
+  // ---------------------------------------------------------------- header + context
+  const countLabel = h('span', { class: 'count-label' });
+  const header = pageHeader({ title: t('nav.bindings'), subtitle: t('bindings.subtitle'), meta: countLabel });
+  const scenarioCtx = contextSelect({
+    label: t('bindings.scenarioContext'),
+    icon: 'layers',
+    value: t('bindings.allScenarios'),
+    renderPicker: () => scenarioPicker(),
+  });
+  const context = contextBar(scenarioCtx.el, h('span', { class: 'spacer' }), h('span', { class: 'ctx-hint muted small', text: t('bindings.contextHint') }));
+
+  function scenarioPicker() {
+    const rows = allScenarios.map((s) => {
+      const cb = h('input', { type: 'checkbox', checked: state.visible.has(s.id), on: { change: () => {
+        if (cb.checked) state.visible.add(s.id);
+        else if (state.visible.size > 1) state.visible.delete(s.id);
+        else cb.checked = true;
+        applyContext();
+      } } });
+      return h('label', { class: 'ctx-check' }, cb, h('span', { class: 'mono', text: s.code }), h('span', { class: 'muted', text: s.name }));
+    });
+    return h('div', null,
+      h('button', { type: 'button', class: ['ctx-option', state.visible.size === allScenarios.length && 'active'], on: { click: () => { for (const s of allScenarios) state.visible.add(s.id); applyContext(); scenarioCtx.close(); } } }, t('bindings.allScenarios')),
+      ...rows,
+    );
+  }
+
+  function applyContext() {
+    const list = scenarios();
+    scenarioCtx.setValue('', list.length === allScenarios.length ? t('bindings.allScenarios') : list.map((s) => s.code).join(', '));
+    ctx.router.setParams({ scenarios: list.length === allScenarios.length ? null : list.map((s) => s.code).join(',') });
+    if (state.scenarioId && !state.visible.has(state.scenarioId)) state.scenarioId = null;
+    renderHead();
+    refresh({ keepScroll: true });
+    renderInsights();
+  }
+
+  // ---------------------------------------------------------------- filters
+  const segButtons = new Map();
+  const coverageSeg = h('div', { class: 'seg coverage-seg', role: 'radiogroup' }, COVERAGE.map((v) => {
+    const b = h('button', { type: 'button', role: 'radio', class: ['seg-btn', v === state.coverage && 'active', v && `seg-${v}`], 'aria-checked': String(v === state.coverage), on: { click: () => setCoverage(v) } },
+      h('span', { text: v ? t(`coverage.${v}`) : t('coverage.all') }), h('span', { class: 'seg-count' }));
+    segButtons.set(v, b);
     return b;
   }));
-  const typeSelects = scenarios.map((s) => {
-    const sel = h('select', { class: 'input input-sm', 'aria-label': s.code }, h('option', { value: '', text: t('bindings.anyType', { scenario: s.code }) }), ...BINDING_TYPES.filter((x) => x !== 'none').map((x) => h('option', { value: x, text: `${s.code}: ${t(`binding.type.${x}`)}` })));
-    sel.addEventListener('change', () => { state.types[s.id] = sel.value; refresh(); });
-    return sel;
+  const filters = filterBar({
+    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; refresh({ keepScroll: false }); }, onEnter: () => { if (state.items.length) selectCell(state.items[0].id, state.scenarioId); } },
+    filters: [
+      ...allScenarios.map((s) => ({ key: `type:${s.id}`, label: t('bindings.typeFilter', { scenario: s.code }), options: BINDING_TYPES.filter((x) => x !== 'none').map((x) => ({ value: x, label: t(`binding.type.${x}`) })) })),
+      { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
+    ],
+    extra: [coverageSeg],
+    onChange: (values) => { state.filters = values; refresh({ keepScroll: false }); },
   });
-  const warnCheck = h('input', { type: 'checkbox', on: { change: (e) => { state.warningsOnly = e.target.checked; refresh(); } } });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), searchInput), seg, ...typeSelects, h('label', { class: 'check-inline' }, warnCheck, h('span', { text: t('mm.filter.warningsOnly') })));
-  const header = h('div', { class: 'table-head binding-row' },
-    h('span', { class: 'col-code', text: t('mm.col.code') }),
-    h('span', { class: 'col-name', text: t('mm.col.name') }),
-    ...scenarios.map((s) => h('span', { class: 'col-binding-wide', text: s.name })),
-    h('span', { class: 'col-legacy', text: t('bindings.legacy') }),
-    h('span', { class: 'col-warn', text: '' }),
-  );
+
+  function setCoverage(v) {
+    state.coverage = v;
+    for (const [k, b] of segButtons) { b.classList.toggle('active', k === v); b.setAttribute('aria-checked', String(k === v)); }
+    ctx.router.setParams({ coverage: v || null });
+    refresh({ keepScroll: false });
+  }
+
+  // ---------------------------------------------------------------- matrix
+  const head = h('div', { class: 'table-head binding-row bmatrix-row' });
   const empty = h('div', { class: 'empty', hidden: true }, icon('layers', { size: 28 }), h('p', { text: t('bindings.empty') }));
   const listHost = h('div', { class: 'list-host' });
-  const root = h('div', { class: 'view-single' }, summary, toolbar, header, listHost, empty);
-  container.appendChild(root);
+  const main = h('section', { class: 'pane grid-pane' }, head, listHost, empty);
 
-  const list = new VirtualList(listHost, { rowHeight: 40, keyOf: (m) => m.id, emptyNode: empty, renderRow });
+  const list = new VirtualList(listHost, {
+    rowHeight: 'row',
+    keyOf: (m) => m.id,
+    emptyNode: empty,
+    renderRow,
+    onSelect: (m) => selectCell(m ? m.id : null, null),
+    onActivate: (m) => open(m.id, state.scenarioId),
+  });
+  // ← → walk across the scenarios of the selected row; the list handles ↑ ↓ Enter.
+  list.viewport.addEventListener('keydown', (e) => {
+    if ((e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') || !state.selectedId) return;
+    e.preventDefault();
+    const cols = scenarios();
+    const at = state.scenarioId ? cols.findIndex((s) => s.id === state.scenarioId) : -1;
+    const next = e.key === 'ArrowRight' ? Math.min(cols.length - 1, at + 1) : Math.max(-1, at - 1);
+    selectCell(state.selectedId, next < 0 ? null : cols[next].id);
+  });
 
-  function markSeg() {
-    for (const b of segButtons) {
-      const on = b.dataset.value === state.coverage;
-      b.classList.toggle('active', on);
-      b.setAttribute('aria-checked', String(on));
-    }
+  function template() {
+    return `96px minmax(0, 1fr) ${scenarios().map(() => 'minmax(0, 1.2fr)').join(' ')} 120px 28px`;
+  }
+
+  function renderHead() {
+    // "Partial" cannot happen with one scenario in context; hide the dead segment.
+    segButtons.get('partial').hidden = scenarios().length < 2;
+    head.style.gridTemplateColumns = template();
+    head.replaceChildren(
+      h('span', { class: 'col-code', text: t('mm.col.code') }),
+      h('span', { class: 'col-name', text: t('mm.col.name') }),
+      ...scenarios().map((s) => h('span', { class: 'col-binding-wide', text: s.name, title: s.code })),
+      h('span', { class: 'col-legacy', text: t('bindings.legacy') }),
+      h('span', { class: 'col-warn', text: '' }),
+    );
   }
 
   function renderRow(m) {
+    const cols = scenarios();
     const cov = selectors.coverageOf(m.id);
     const bindings = selectors.bindingsByMetric(m.id);
-    const legacy = scenarios.map((s) => bindings.get(s.id)).filter((b) => b && b.legacyCode).map((b) => b.legacyCode);
+    const legacy = cols.map((s) => bindings.get(s.id)).filter((b) => b && b.legacyCode).map((b) => b.legacyCode);
     const issues = ctx.validation.issuesForMetric(m.id).filter((i) => i.entity.type === 'binding' || i.scenarioId);
     const sev = worstSeverity(issues);
-    return h('div', { class: ['binding-row', 'row', ctx.currentMetricId === m.id && 'active'], role: 'row', tabindex: '-1', dataset: { id: m.id }, on: { click: () => open(m.id) } },
+    const row = h('div', { class: ['binding-row', 'bmatrix-row', 'row', ctx.currentMetricId === m.id && 'active'], role: 'row', tabindex: '-1', dataset: { id: m.id }, style: { gridTemplateColumns: template() }, title: t('bindings.contextHint') },
       h('span', { class: 'col-code mono', text: m.code }),
       h('span', { class: 'col-name' }, h('span', { class: 'name-text', text: m.name })),
-      ...scenarios.map((s) => {
+      ...cols.map((s) => {
         const b = bindings.get(s.id);
         const detail = b && cov[s.id] ? (b.type === 'formula' ? b.formulaText : b.type === 'source' ? [b.source.system, b.source.dataset].filter(Boolean).join(' / ') : b.assumption.value) : '';
-        return h('span', { class: 'col-binding-wide', on: { click: (e) => { e.stopPropagation(); open(m.id, s.id); } } }, bindingChip(s.code, cov[s.id]), detail && h('span', { class: 'binding-detail mono', text: detail, title: detail }));
+        return h('span', {
+          class: ['bcell', m.id === state.selectedId && s.id === state.scenarioId && 'selected'],
+          dataset: { scenario: s.id },
+          on: {
+            click: (e) => { e.stopPropagation(); selectCell(m.id, s.id); },
+            dblclick: (e) => { e.stopPropagation(); open(m.id, s.id); },
+          },
+        }, bindingChip(s.code, cov[s.id]), detail && h('span', { class: 'binding-detail mono', text: detail, title: detail }));
       }),
-      h('span', { class: 'col-legacy mono muted', text: legacy.join(' · ') }),
+      h('span', { class: 'col-legacy mono muted', text: legacy.join(' · '), title: legacy.join(' · ') }),
       h('span', { class: 'col-warn' }, sev ? severityDot(sev, issues.length) : null),
     );
+    return row;
   }
 
   function compute() {
     const hits = selectors.searchMetrics(state.query);
+    const ids = scenarios().map((s) => s.id);
+    const f = state.filters;
     const out = [];
+    const counts = { '': 0, complete: 0, partial: 0, missing: 0 };
     for (const m of store.list('metrics')) {
       if (hits && !hits.has(m.id)) continue;
-      if (state.coverage && selectors.coverageClass(m.id) !== state.coverage) continue;
       const cov = selectors.coverageOf(m.id);
       let ok = true;
-      for (const s of scenarios) if (state.types[s.id] && cov[s.id] !== state.types[s.id]) ok = false;
+      for (const s of allScenarios) if (f[`type:${s.id}`] && cov[s.id] !== f[`type:${s.id}`]) ok = false;
       if (!ok) continue;
-      if (state.warningsOnly && !ctx.validation.issuesForMetric(m.id).some((i) => i.entity.type === 'binding' || i.scenarioId)) continue;
+      if (f.warningsOnly && !ctx.validation.issuesForMetric(m.id).some((i) => i.entity.type === 'binding' || i.scenarioId)) continue;
+      const level = selectors.coverageLevel(m.id, ids);
+      counts[''] += 1;
+      counts[level] += 1;
+      if (state.coverage && level !== state.coverage) continue;
       out.push(m);
     }
     out.sort((a, b) => compareText(a.code, b.code));
+    for (const [k, b] of segButtons) b.querySelector('.seg-count').textContent = formatNumber(counts[k]);
     return out;
   }
 
-  function renderSummary() {
-    const s = selectors.coverageSummary();
-    summary.replaceChildren(
-      stat(t('bindings.summary.total'), s.total, 'all'),
-      h('span', { class: 'summary-arrow', text: '→' }),
-      ...scenarios.map((sc) => h('span', { class: 'stat' }, h('span', { class: 'stat-value', text: formatNumber(s.perScenario[sc.id]) }), h('span', { class: 'stat-label', text: t('bindings.summary.scenario', { scenario: sc.code }) }))),
-      stat(t('coverage.both'), s.both, 'both'),
-      stat(t('coverage.none'), s.none, 'none', s.none > 0),
-    );
-  }
-
-  function stat(label, value, coverage, warn = false) {
-    const target = coverage === 'all' ? '' : coverage;
-    return h('button', { type: 'button', class: ['stat', warn && 'warn', state.coverage === target && 'active'], on: { click: () => { state.coverage = target; markSeg(); refresh(); } } }, h('span', { class: 'stat-value', text: formatNumber(value) }), h('span', { class: 'stat-label', text: label }));
-  }
-
-  function refresh() {
+  function refresh({ keepScroll = true } = {}) {
     state.items = compute();
-    list.setItems(state.items);
-    renderSummary();
+    list.setItems(state.items, { keepScroll });
+    const total = store.count('metrics');
+    countLabel.textContent = state.items.length === total ? t('mm.count', { n: formatNumber(total) }) : t('mm.countFiltered', { n: formatNumber(state.items.length), total: formatNumber(total) });
+    if (state.selectedId && !list.itemOf(state.selectedId)) selectCell(null, null);
+  }
+
+  // ---------------------------------------------------------------- selection + insights
+  const insights = createInsightsPanel({ preferenceKey: 'bindings', title: t('insights.title'), emptyText: t('bindings.pick') });
+
+  function selectCell(metricId, scenarioId) {
+    const prev = { m: state.selectedId, s: state.scenarioId };
+    state.selectedId = metricId && store.has('metrics', metricId) ? metricId : null;
+    state.scenarioId = state.selectedId && scenarioId && state.visible.has(scenarioId) ? scenarioId : null;
+    list.setSelected(state.selectedId);
+    if (prev.s !== state.scenarioId || prev.m !== state.selectedId) list.refresh();
+    const s = state.scenarioId ? store.get('scenarios', state.scenarioId) : null;
+    ctx.router.setParams({ selected: state.selectedId, scenario: s ? s.code : null });
+    renderInsights();
+  }
+
+  function renderInsights() {
+    if (!state.selectedId) { insights.setContent(null); return; }
+    const s = state.scenarioId ? store.get('scenarios', state.scenarioId) : null;
+    const goDependencies = () => ctx.router.navigate('dependencies', { metric: state.selectedId, scenario: s ? s.code : null });
+    if (!s) {
+      insights.setContent(renderMetricInsights(ctx, state.selectedId, {
+        onEdit: () => open(state.selectedId, null),
+        onDependencies: goDependencies,
+        onStructure: (nodeId) => ctx.router.navigate('metrics', { node: nodeId, selected: state.selectedId }),
+      }));
+      return;
+    }
+    insights.setContent(renderBindingInsights(ctx, state.selectedId, s.id, {
+      onEdit: () => open(state.selectedId, s.id),
+      onDependencies: goDependencies,
+      onReference: (metricId, scenarioId) => {
+        if (!list.itemOf(metricId)) { filters.reset(); setCoverage(''); }
+        const idx = state.items.findIndex((m) => m.id === metricId);
+        if (idx >= 0) list.scrollToIndex(idx);
+        selectCell(metricId, scenarioId && state.visible.has(scenarioId) ? scenarioId : null);
+      },
+    }));
   }
 
   function open(id, scenarioId = null) {
     if (ctx.openMetric(id, { section: 'bindings', scenarioId })) ctx.router.setParams({ metric: id });
   }
 
-  const onSearch = debounce(() => { state.query = searchInput.value; refresh(); }, 160);
-  searchInput.addEventListener('input', onSearch);
-  const schedule = debounce(refresh, 30);
+  // ---------------------------------------------------------------- layout + sync
+  const layout = workspaceLayout({ header: header.el, context: context.el, main, insights: insights.el, className: 'bindings-ws' });
+  layout.el.insertBefore(filters.el, layout.body);
+  container.appendChild(layout.el);
+
+  const schedule = debounce(() => { refresh(); renderInsights(); }, 30);
   const offStore = store.events.on('change', (evt) => { if (['*', 'metrics', 'bindings', 'scenarios'].includes(evt.collection)) schedule(); });
-  const offValidation = ctx.validation.onChange(() => (state.warningsOnly ? refresh() : list.refresh()));
+  const offValidation = ctx.validation.onChange(() => { if (state.filters.warningsOnly) refresh(); else list.refresh(); renderInsights(); });
+  renderHead();
   refresh();
 
   return {
     onShow() { list.refresh(); },
     update(route) {
-      if (route.params.coverage && route.params.coverage !== state.coverage) { state.coverage = route.params.coverage; markSeg(); refresh(); }
-      const metricId = route.params.metric;
-      if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId, { section: 'bindings' });
+      const p = route.params;
+      if (p.scenarios) {
+        const codes = new Set(String(p.scenarios).split(',').map((c) => c.trim().toUpperCase()));
+        const wanted = allScenarios.filter((s) => codes.has(s.code.toUpperCase())).map((s) => s.id);
+        if (wanted.length && (wanted.length !== state.visible.size || wanted.some((id) => !state.visible.has(id)))) { state.visible = new Set(wanted); applyContext(); }
+      }
+      const coverage = COVERAGE.includes(p.coverage) ? p.coverage : '';
+      if (coverage !== state.coverage) setCoverage(coverage);
+      const scenario = p.scenario ? selectors.scenarioByCode(p.scenario) : null;
+      if (p.selected && store.has('metrics', p.selected) && (p.selected !== state.selectedId || (scenario ? scenario.id : null) !== state.scenarioId)) {
+        const idx = state.items.findIndex((m) => m.id === p.selected);
+        if (idx >= 0) list.scrollToIndex(idx);
+        selectCell(p.selected, scenario ? scenario.id : null);
+      }
+      const metricId = p.metric;
+      if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId, { section: 'bindings', scenarioId: scenario ? scenario.id : null });
     },
     onDrawerClosed() { ctx.router.setParams({ metric: null }); list.refresh(); },
-    onMetricOpened() { list.refresh(); },
-    destroy() { offStore(); offValidation(); onSearch.cancel(); list.destroy(); root.remove(); },
+    onMetricOpened(id) { if (id !== state.selectedId) selectCell(id, state.scenarioId); else list.refresh(); },
+    destroy() { offStore(); offValidation(); list.destroy(); schedule.cancel(); layout.el.remove(); },
   };
 }

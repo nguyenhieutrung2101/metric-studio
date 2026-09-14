@@ -195,6 +195,20 @@ export function createSelectors(store) {
     return `${bound[0].code.toLowerCase()}-only`;
   };
 
+  /**
+   * 'complete' | 'partial' | 'missing' over the given scenarios (default: all).
+   * The vocabulary every coverage filter and tile uses; it does not bake in
+   * how many scenarios there are.
+   */
+  const coverageLevel = (metricId, scenarioIds = null) => {
+    const cov = coverageOf(metricId);
+    const ids = scenarioIds || scenarios().map((s) => s.id);
+    let bound = 0;
+    for (const id of ids) if (cov[id]) bound += 1;
+    if (!ids.length || bound === 0) return 'missing';
+    return bound === ids.length ? 'complete' : 'partial';
+  };
+
   const coverageSummary = () =>
     cached('coverageSummary', ['metrics', 'bindings', 'scenarios'], () => {
       const list = scenarios();
@@ -354,6 +368,7 @@ export function createSelectors(store) {
     bindingFor,
     coverageOf,
     coverageClass,
+    coverageLevel,
     coverageSummary,
     dimensionsSorted,
     metricDimensions,

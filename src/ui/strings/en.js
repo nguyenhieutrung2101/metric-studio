@@ -139,6 +139,9 @@ export const en = {
   'coverage.both': 'Both',
   'coverage.only': '{scenario} only',
   'coverage.none': 'No binding',
+  'coverage.complete': 'Complete',
+  'coverage.partial': 'Partial',
+  'coverage.missing': 'Missing',
 
   // metric master view
   'mm.structure': 'Structure',
@@ -266,6 +269,23 @@ export const en = {
   'bindings.empty': 'No metrics match these filters.',
   'bindings.summary.total': 'Metric Master',
   'bindings.summary.scenario': '{scenario} bound',
+  'bindings.subtitle': 'One row per metric, one cell per scenario.',
+  'bindings.scenarioContext': 'Scenarios',
+  'bindings.allScenarios': 'All scenarios',
+  'bindings.contextHint': 'Click a cell to inspect · double-click or Enter to edit · ← → move between scenarios',
+  'bindings.pick': 'Select a row to inspect the metric, or a cell to inspect one binding.',
+  'bindings.typeFilter': '{scenario} binding',
+  'bindings.editBinding': 'Edit binding',
+  'bindings.addBinding': 'Add binding',
+  'bindings.noBinding': 'No binding in {scenario} yet.',
+  'bindings.references': 'References',
+  'bindings.noReferences': 'No references.',
+  'bindings.updated': 'Updated',
+  'bindings.legacyShort': 'Legacy',
+  'bindings.coverageOf': '{bound} of {total} scenarios bound',
+  'bindings.inScenario': 'in {scenario}',
+  'bindings.openInMaster': 'Open in Metric Master',
+  'bindings.formulaErrors': 'Formula errors',
 
   // dependencies
   'dep.pickRoot': 'Pick a root metric…',

@@ -139,6 +139,9 @@ export const vi = {
   'coverage.both': 'Cả hai',
   'coverage.only': 'Chỉ {scenario}',
   'coverage.none': 'Chưa gắn',
+  'coverage.complete': 'Đủ',
+  'coverage.partial': 'Một phần',
+  'coverage.missing': 'Thiếu',
 
   // metric master view
   'mm.structure': 'Cấu trúc',
@@ -266,6 +269,23 @@ export const vi = {
   'bindings.empty': 'Không có chỉ tiêu phù hợp bộ lọc.',
   'bindings.summary.total': 'Danh mục chỉ tiêu',
   'bindings.summary.scenario': 'Đã gắn {scenario}',
+  'bindings.subtitle': 'Mỗi dòng một chỉ tiêu, mỗi ô một kịch bản.',
+  'bindings.scenarioContext': 'Kịch bản',
+  'bindings.allScenarios': 'Tất cả kịch bản',
+  'bindings.contextHint': 'Nhấp một ô để xem · nhấp đúp hoặc Enter để sửa · ← → chuyển giữa các kịch bản',
+  'bindings.pick': 'Chọn một dòng để xem chỉ tiêu, hoặc một ô để xem một liên kết.',
+  'bindings.typeFilter': 'Liên kết {scenario}',
+  'bindings.editBinding': 'Sửa liên kết',
+  'bindings.addBinding': 'Thêm liên kết',
+  'bindings.noBinding': 'Chưa có liên kết trong {scenario}.',
+  'bindings.references': 'Tham chiếu',
+  'bindings.noReferences': 'Không có tham chiếu.',
+  'bindings.updated': 'Cập nhật',
+  'bindings.legacyShort': 'Mã cũ',
+  'bindings.coverageOf': 'Đã liên kết {bound}/{total} kịch bản',
+  'bindings.inScenario': 'trong {scenario}',
+  'bindings.openInMaster': 'Mở trong Metric Master',
+  'bindings.formulaErrors': 'Lỗi công thức',
 
   // dependencies
   'dep.pickRoot': 'Chọn chỉ tiêu gốc…',

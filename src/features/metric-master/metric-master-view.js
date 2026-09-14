@@ -63,7 +63,7 @@ export function mountMetricMasterView(container, ctx) {
     search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; refreshList({ keepScroll: false }); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
     filters: [
       { key: 'status', label: t('metric.field.status'), options: METRIC_STATUSES.map((s) => ({ value: s, label: t(`metric.status.${s}`) })) },
-      { key: 'coverage', label: t('mm.filter.coverage'), options: () => coverageOptions(ctx) },
+      { key: 'coverage', label: t('mm.filter.coverage'), options: () => coverageOptions() },
       { key: 'unitId', label: t('metric.field.unit'), options: () => selectors.units().map((u) => ({ value: u.id, label: u.code })) },
       { key: 'dimensionId', label: t('mm.filter.dimension'), options: () => selectors.dimensionsSorted().map((d) => ({ value: d.id, label: `${d.code} ${d.name}` })) },
       { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
@@ -272,7 +272,7 @@ export function mountMetricMasterView(container, ctx) {
       if (hits && !hits.has(m.id)) continue;
       if (f.status && m.status !== f.status) continue;
       if (f.unitId && m.unitId !== f.unitId) continue;
-      if (f.coverage && selectors.coverageClass(m.id) !== f.coverage) continue;
+      if (f.coverage && selectors.coverageLevel(m.id) !== f.coverage) continue;
       if (f.dimensionId && !selectors.metricDimensions(m.id).some((l) => l.dimensionId === f.dimensionId)) continue;
       if (f.warningsOnly && ctx.validation.issuesForMetric(m.id).length === 0) continue;
       items.push(m);
@@ -437,12 +437,8 @@ export function mountMetricMasterView(container, ctx) {
   };
 }
 
-function coverageOptions(ctx) {
-  const scenarios = ctx.selectors.scenarios();
-  const out = [{ value: 'both', label: t('coverage.both') }];
-  for (const s of scenarios) out.push({ value: `${s.code.toLowerCase()}-only`, label: t('coverage.only', { scenario: s.code }) });
-  out.push({ value: 'none', label: t('coverage.none') });
-  return out;
+function coverageOptions() {
+  return ['complete', 'partial', 'missing'].map((v) => ({ value: v, label: t(`coverage.${v}`) }));
 }
 
 function keyHandler(fn) {
