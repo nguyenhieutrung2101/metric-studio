@@ -214,28 +214,44 @@ export function parseSnapshot(input) {
     if (dropped > 0) addRepair('REFERENCE_DROPPED', 'Formula reference that was not usable: dropped', dropped);
 
     const parsed = parseFormula(b.formulaText);
+    // Syntax errors are a fact about the text, never about the cache: a
+    // broken formula must arrive flagged even when its cache said nothing.
+    b.formulaErrors = parsed.errors.map((e) => ({ message: e.message, position: e.position }));
     const expected = distinctReferences(parsed.references);
-    // Compare by reference identity, not by count: a cache can be the right
-    // length and still name something the formula does not.
-    const have = new Set(b.parsedReferences.map((r) => referenceIdentity(r)));
-    const complete = expected.length === b.parsedReferences.length && expected.every((r) => have.has(referenceIdentity(r)));
-    if (!complete) {
-      b.parsedReferences = expected.map((r) => resolveAgainstFile(r, b.scenarioId));
-      if (cachedCount || expected.length) {
-        addRepair('REFERENCE_REPARSED', 'Formula reference cache that did not match the formula: rebuilt from the formula text', 1);
+
+    // Merge reference by reference, matched by identity. A cached entry that
+    // resolves by stable id survives a rename of the metric it points at —
+    // that is what the stable id is for — and one damaged sibling must not
+    // cost it that. Only what the formula no longer says is dropped, and
+    // only what the cache cannot answer is resolved afresh against the file.
+    const cachedByIdentity = new Map();
+    for (const ref of b.parsedReferences) cachedByIdentity.set(referenceIdentity(ref), ref);
+    let rebuilt = 0;
+    let reset = 0;
+    const merged = expected.map((r) => {
+      const cached = cachedByIdentity.get(referenceIdentity(r));
+      if (!cached) {
+        rebuilt += 1;
+        return resolveAgainstFile(r, b.scenarioId);
       }
-      continue;
-    }
-    // The cache matches the formula. Only its resolution can still be stale.
-    for (const ref of b.parsedReferences) {
-      if (ref.metricId && !metricIds.has(ref.metricId)) {
-        const re = resolveAgainstFile(ref, b.scenarioId);
-        ref.metricId = re.metricId;
-        ref.status = re.status;
-        addRepair('REFERENCE_RESET', 'Cached formula reference pointing outside the file: re-resolved against the file');
+      const out = { ...cached, raw: r.raw, token: r.token, scenarioCode: r.scenarioCode || null, dimensionContext: r.dimensionContext || null };
+      if (out.metricId && metricIds.has(out.metricId)) {
+        out.status = out.scenarioCode && !scenariosByCode.has(referenceKey(out.scenarioCode)) ? 'unknown-scenario' : 'resolved';
+      } else {
+        const re = resolveAgainstFile(r, b.scenarioId);
+        if (out.metricId) reset += 1;
+        out.metricId = re.metricId;
+        out.status = re.status;
       }
-      if (ref.scenarioId && !scenarioIds.has(ref.scenarioId)) ref.scenarioId = resolveAgainstFile(ref, b.scenarioId).scenarioId;
+      if (!out.scenarioId || !scenarioIds.has(out.scenarioId)) out.scenarioId = resolveAgainstFile(r, b.scenarioId).scenarioId;
+      return out;
+    });
+    const droppedFromCache = b.parsedReferences.length - (expected.length - rebuilt);
+    b.parsedReferences = merged;
+    if (rebuilt || droppedFromCache > 0) {
+      addRepair('REFERENCE_REPARSED', 'Formula reference cache that did not match the formula: rebuilt from the formula text', 1);
     }
+    if (reset) addRepair('REFERENCE_RESET', 'Cached formula reference pointing outside the file: re-resolved against the file', reset);
   }
 
   // A non-formula binding has no business carrying formula references.

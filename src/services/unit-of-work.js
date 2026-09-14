@@ -15,6 +15,7 @@ export class UnitOfWork {
   constructor() {
     this.ops = [];
     this.guards = [];
+    this.requires = [];
   }
 
   /**
@@ -31,6 +32,18 @@ export class UnitOfWork {
    */
   guard(collection, check) {
     this.guards.push({ collection, check });
+    return this;
+  }
+
+  /**
+   * A record this batch depends on, which must still exist where the data
+   * lives when the batch is written: the parent a node is created under, the
+   * metric a binding belongs to. Cheaper than a guard — one `get` — and it
+   * fails with NotFoundError, which is what the caller would have thrown had
+   * it known.
+   */
+  require(collection, id) {
+    if (id) this.requires.push({ collection, id });
     return this;
   }
 
@@ -58,7 +71,7 @@ export class UnitOfWork {
 export async function commit(repo, store, work) {
   const ops = work instanceof UnitOfWork ? work.ops : work;
   if (!ops.length) return { saved: [], removed: [] };
-  const result = await repo.applyBatch(ops, { guards: work instanceof UnitOfWork ? work.guards : [] });
+  const result = await repo.applyBatch(ops, batchOptions(work));
   mirror(store, result);
   return result;
 }
@@ -73,10 +86,14 @@ export async function commitExclusive(repo, store, plan) {
     const work = await plan(tx);
     const ops = work instanceof UnitOfWork ? work.ops : work;
     if (!ops || !ops.length) return { saved: [], removed: [] };
-    return tx.applyBatch(ops, { guards: work instanceof UnitOfWork ? work.guards : [] });
+    return tx.applyBatch(ops, batchOptions(work));
   });
   mirror(store, result);
   return result;
+}
+
+function batchOptions(work) {
+  return work instanceof UnitOfWork ? { guards: work.guards, requires: work.requires } : {};
 }
 
 /** Push an acknowledged repository result into the store in one change. */

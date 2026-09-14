@@ -2,6 +2,16 @@ import { Repository, ConflictError, NotFoundError, COLLECTIONS, assertCollection
 import { uniqueKeyOf } from '../core/collections.js';
 import { padNumber } from '../utils/text.js';
 
+/** Highest number carried by a code matching `pattern` among `records`. */
+export function highestCode(records, pattern) {
+  let max = 0;
+  for (const record of records) {
+    const m = pattern.exec((record && record.code) || '');
+    if (m) max = Math.max(max, Number(m[1]) || 0);
+  }
+  return max;
+}
+
 /** Thrown when a write would create a second record for a unique relationship. */
 export class UniquenessError extends Error {
   constructor(collection, key) {
@@ -161,10 +171,15 @@ export class MemoryRepository extends Repository {
   }
 
   // ------------------------------------------------------------ batch
-  async _applyBatchNow(ops, { guards = [] } = {}) {
+  async _applyBatchNow(ops, { guards = [], requires = [] } = {}) {
     if (!Array.isArray(ops)) throw new Error('applyBatch expects an array of operations');
     // Fail fast against what this instance knows; the adapter re-runs the
-    // same guards against the durable store, which is the one that decides.
+    // same guards and requirements against the durable store, which is the
+    // one that decides.
+    for (const r of requires) {
+      assertCollection(r.collection);
+      if (!this._data[r.collection].has(r.id)) throw new NotFoundError(r.collection, r.id);
+    }
     for (const g of guards) g.check([...this._data[g.collection].values()].map(clone));
     const puts = [];
     const deletes = [];
@@ -211,7 +226,7 @@ export class MemoryRepository extends Repository {
       if (!plan) continue;
       ordered.push(op.op === 'remove' ? { kind: 'delete', ...plan } : { kind: 'put', ...plan });
     }
-    await this._commit({ puts, deletes, ops: ordered, guards });
+    await this._commit({ puts, deletes, ops: ordered, guards, requires });
     for (const p of puts) this._data[p.collection].set(p.record.id, p.record);
     for (const d of deletes) this._data[d.collection].delete(d.id);
     return {
@@ -236,7 +251,6 @@ export class MemoryRepository extends Repository {
     // The catalogue is about to be someone else's; codes must be re-derived
     // from it rather than carried over from the one being replaced.
     this._sequences.clear();
-    await this._clearSequences();
     const puts = [];
     for (const c of COLLECTIONS) {
       assertCollection(c);
@@ -253,7 +267,6 @@ export class MemoryRepository extends Repository {
 
   async _clearNow() {
     this._sequences.clear();
-    await this._clearSequences();
     await this._commit({ clearAll: true });
     for (const c of COLLECTIONS) this._data[c].clear();
   }
@@ -262,33 +275,27 @@ export class MemoryRepository extends Repository {
   async _allocateCodeNow(collection, { prefix, width, pattern }) {
     assertCollection(collection);
     const key = `${collection}:${prefix}`;
-    const floor = () => this._highestCode(collection, pattern) + 1;
-    const next = await this._nextSequenceValue(key, this._sequences.get(key) ?? null, floor);
+    const next = await this._nextSequenceValue({
+      key,
+      collection,
+      pattern,
+      remembered: this._sequences.get(key) ?? null,
+      floorOf: (records) => highestCode(records, pattern) + 1,
+    });
     this._sequences.set(key, next + 1);
     return `${prefix}${padNumber(next, width)}`;
   }
 
-  _highestCode(collection, pattern) {
-    let max = 0;
-    for (const record of this._data[collection].values()) {
-      const m = pattern.exec(record.code || '');
-      if (m) max = Math.max(max, Number(m[1]) || 0);
-    }
-    return max;
-  }
-
   /**
    * The value to hand out. In memory the queue is the only writer, so the
-   * remembered mark is authoritative; an adapter whose store is shared with
-   * other connections overrides this to read and bump the sequence inside one
-   * transaction.
+   * remembered mark and the mirror are authoritative; an adapter whose store
+   * is shared with other connections overrides this to read the records, the
+   * sequence and bump it inside one transaction — a floor taken from this
+   * connection's mirror would not know what another tab imported.
    */
-  async _nextSequenceValue(key, remembered, floor) {
-    return Math.max(remembered ?? 0, floor());
+  async _nextSequenceValue({ collection, remembered, floorOf }) {
+    return Math.max(remembered ?? 0, floorOf(this._data[collection].values()));
   }
-
-  /** Durable sequences, if the adapter keeps any. */
-  async _clearSequences() {}
 
   // ------------------------------------------------------------ restore points
   async listRestorePoints() {

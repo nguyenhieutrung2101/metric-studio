@@ -44,9 +44,10 @@ export class StructureService {
     const siblings = this._siblings(parentId);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
     const node = createStructureNode({ parentId, name: label, code, description, owner, sortOrder });
-    const saved = await this.repo.saveStructure(node, null);
-    this.store.upsert('structureNodes', saved);
-    return saved;
+    // The parent this tab can see may already be gone in the database.
+    const work = new UnitOfWork().save('structureNodes', node, null).require('structureNodes', parentId);
+    const result = await commit(this.repo, this.store, work);
+    return result.saved.find((s) => s.record.id === node.id).record;
   }
 
   async updateNode(id, patch, expectedToken) {
@@ -103,8 +104,10 @@ export class StructureService {
       }
       // The critical section covers this instance. Another tab has its own,
       // and its own mirror, so the question is asked again against the stored
-      // hierarchy at the moment of writing.
+      // hierarchy at the moment of writing — and the parent itself must still
+      // be there, not just free of cycles.
       if (parentId) {
+        work.require('structureNodes', parentId);
         work.guard('structureNodes', (stored) => {
           const live = new Map(stored.map((n) => [n.id, n]));
           live.set(id, { ...(live.get(id) || node), parentId });
@@ -202,7 +205,7 @@ export class StructureService {
     if (dup) return dup;
     const primary = isPrimary == null ? existing.length === 0 : isPrimary;
     const link = createMetricStructure({ metricId, structureNodeId, isPrimary: primary });
-    const work = new UnitOfWork();
+    const work = new UnitOfWork().require('metrics', metricId).require('structureNodes', structureNodeId);
     if (primary) for (const l of existing) if (l.isPrimary) work.save('metricStructures', { ...l, isPrimary: false }, tokenOf(l));
     work.save('metricStructures', link, null);
     const result = await commit(this.repo, this.store, work);

@@ -186,9 +186,10 @@ export class DimensionService {
     if (!this.store.has('dimensions', dimensionId)) throw new NotFoundError('dimensions', dimensionId);
     const dup = this.selectors.metricDimensions(metricId).find((l) => l.dimensionId === dimensionId);
     if (dup) return dup;
-    const saved = await this.repo.saveMetricDimension(createMetricDimension({ metricId, dimensionId, ...options }), null);
-    this.store.upsert('metricDimensions', saved);
-    return saved;
+    const link = createMetricDimension({ metricId, dimensionId, ...options });
+    const work = new UnitOfWork().save('metricDimensions', link, null).require('metrics', metricId).require('dimensions', dimensionId);
+    const result = await commit(this.repo, this.store, work);
+    return result.saved.find((s) => s.record.id === link.id).record;
   }
 
   async updateLink(linkId, patch, expectedToken) {

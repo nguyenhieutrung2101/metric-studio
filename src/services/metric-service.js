@@ -4,6 +4,19 @@ import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { referenceKey, padNumber } from '../utils/text.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 
+/** Records that only exist because of a metric and go with it. */
+const DEPENDENT_COLLECTIONS = ['metricStructures', 'bindings', 'metricDimensions'];
+
+/** A cascade that missed a dependent the database holds; the caller retries once. */
+export class StaleCascadeError extends Error {
+  constructor(collection, id) {
+    super(`${collection}/${id} appeared after the cascade was planned`);
+    this.name = 'StaleCascadeError';
+    this.collection = collection;
+    this.id = id;
+  }
+}
+
 export class ValidationFailure extends Error {
   constructor(message, field = null) {
     super(message);
@@ -104,19 +117,38 @@ export class MetricService {
    */
   async remove(id, expectedToken) {
     if (!this.store.has('metrics', id)) throw new NotFoundError('metrics', id);
-    await commitExclusive(this.repo, this.store, (tx) => {
-      const existing = tx.get('metrics', id);
-      if (!existing) throw new NotFoundError('metrics', id);
-      const work = new UnitOfWork();
-      for (const collection of ['metricStructures', 'bindings', 'metricDimensions']) {
-        for (const r of tx.list(collection)) {
-          if (r.metricId === id) work.remove(collection, r.id, tokenOf(r), { optional: true });
-        }
+    // The dependents are collected from this instance's records, then the
+    // batch carries a guard that refuses if the database holds one the
+    // collection missed — a binding another tab created a moment ago. The
+    // guard hands the database's records to the mirror, so the one retry
+    // collects the complete set. Two rounds suffice: the second is judged
+    // against what the first one just learned.
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await commitExclusive(this.repo, this.store, (tx) => {
+          const existing = tx.get('metrics', id);
+          if (!existing) throw new NotFoundError('metrics', id);
+          const work = new UnitOfWork();
+          const removing = new Set();
+          for (const collection of DEPENDENT_COLLECTIONS) {
+            for (const r of tx.list(collection)) {
+              if (r.metricId !== id) continue;
+              work.remove(collection, r.id, tokenOf(r), { optional: true });
+              removing.add(r.id);
+            }
+            work.guard(collection, (stored) => {
+              for (const r of stored) if (r.metricId === id && !removing.has(r.id)) throw new StaleCascadeError(collection, r.id);
+            });
+          }
+          work.remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
+          return work;
+        });
+        return true;
+      } catch (err) {
+        if (err instanceof StaleCascadeError && attempt === 0) continue;
+        throw err;
       }
-      work.remove('metrics', id, expectedToken == null ? tokenOf(existing) : expectedToken);
-      return work;
-    });
-    return true;
+    }
   }
 
   /**

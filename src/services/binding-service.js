@@ -2,6 +2,7 @@ import { createBinding, BindingType } from '../core/models/binding.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { parseFormula, distinctReferences } from './formula-parser.js';
 import { ValidationFailure } from './metric-service.js';
+import { UnitOfWork, commit } from './unit-of-work.js';
 
 /**
  * Parse a formula and resolve its references against the catalogue.
@@ -74,8 +75,14 @@ export class BindingService {
       binding.parsedReferences = [];
       binding.formulaErrors = [];
     }
-    const saved = await this.repo.saveBinding(binding, existing ? (expectedToken == null ? tokenOf(existing) : expectedToken) : null);
-    this.store.upsert('bindings', saved);
+    // A binding for a metric another tab has just deleted would be an orphan
+    // from birth; the requirement is checked where the data lives.
+    const work = new UnitOfWork()
+      .save('bindings', binding, existing ? (expectedToken == null ? tokenOf(existing) : expectedToken) : null)
+      .require('metrics', metricId)
+      .require('scenarios', scenarioId);
+    const result = await commit(this.repo, this.store, work);
+    const saved = result.saved.find((s) => s.record.id === binding.id).record;
     return { binding: saved, resolution };
   }
 

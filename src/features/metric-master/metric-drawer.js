@@ -615,6 +615,7 @@ export class MetricDrawer {
     if (!this.metricId) return;
     const { ctx } = this;
     let savedAny = false;
+    const seqAtStart = this._openSeq;
     try {
       if (!sameMetric(this.draft, pickMetric(this.base))) {
         // What was sent, and which editor sent it. A save is not instant, and
@@ -629,31 +630,38 @@ export class MetricDrawer {
         else return;
       }
       let unresolved = 0;
+      // The loop holds the drafts of the editor that pressed Save. Each write
+      // takes the drawer's *current* metric, so before every one of them the
+      // editor must still be that one — after an await it may not be.
+      const seq = this._openSeq;
       for (const [scenarioId, state] of this.bindingDrafts) {
-        if (state.dirty) {
-          const saved = await this._persistBinding(scenarioId, { silent: true });
-          if (saved) unresolved += (saved.parsedReferences || []).filter((r) => r.status !== 'resolved').length;
-          savedAny = true;
-        }
+        if (!state.dirty) continue;
+        if (seq !== this._openSeq) return;
+        const saved = await this._persistBinding(scenarioId, { silent: true });
+        if (saved) unresolved += (saved.parsedReferences || []).filter((r) => r.status !== 'resolved').length;
+        savedAny = true;
       }
+      if (seq !== this._openSeq) return;
       if (savedAny && unresolved) ctx.toast.info(t('binding.savedWithMissing', { n: unresolved }), { duration: 5000 });
       else if (savedAny) ctx.toast.success(t('drawer.saved'));
       this._updateDirty();
       this._renderAdvanced();
     } catch (err) {
-      this._handleError(err);
+      this._handleError(err, seqAtStart);
     }
   }
 
   async saveBinding(scenarioId) {
+    const seq = this._openSeq;
     try {
       const saved = await this._persistBinding(scenarioId, { silent: true });
+      if (seq !== this._openSeq) return;
       if (!saved) return;
       const unresolved = (saved.parsedReferences || []).filter((r) => r.status !== 'resolved').length;
       if (unresolved) this.ctx.toast.info(t('binding.savedWithMissing', { n: unresolved }), { duration: 5000 });
       else this.ctx.toast.success(t('binding.saved', { scenario: this.ctx.store.get('scenarios', scenarioId)?.code }));
     } catch (err) {
-      this._handleError(err);
+      this._handleError(err, seq);
     }
   }
 
@@ -669,7 +677,8 @@ export class MetricDrawer {
     }
     const sent = JSON.stringify(d);
     const seq = this._openSeq;
-    const { binding, resolution } = await this.ctx.services.bindings.setBinding(this.metricId, scenarioId, d, state.base ? tokenOf(state.base) : null);
+    const metricId = this.metricId;
+    const { binding, resolution } = await this.ctx.services.bindings.setBinding(metricId, scenarioId, d, state.base ? tokenOf(state.base) : null);
     // The drawer may have moved to another metric while this was in flight;
     // the record is saved either way, but it is not this editor's any more.
     if (seq !== this._openSeq) return binding;
@@ -745,8 +754,19 @@ export class MetricDrawer {
     }
   }
 
-  _handleError(err) {
+  /**
+   * @param {number} [seq] the editor sequence at which the failed operation
+   *   started. A failure that arrives after the drawer has moved to another
+   *   metric is reported, but never lets that metric's conflict banner or
+   *   record land in the editor now open.
+   */
+  _handleError(err, seq = this._openSeq) {
+    const stale = seq !== this._openSeq;
     if (err instanceof ConflictError) {
+      if (stale) {
+        this.ctx.toast.error(t('conflict.staleEditor'));
+        return;
+      }
       this._showConflict(err);
       return;
     }
@@ -797,7 +817,12 @@ export class MetricDrawer {
       this.drawer.close({ force: true });
       return;
     }
+    // The banner belongs to the metric it was raised for; if the drawer has
+    // moved on, the fresh record still goes to the store, but not into an
+    // editor that is showing something else.
+    const owner = err.collection === 'metrics' ? err.current.id : err.current.metricId;
     this.ctx.store.upsert(err.collection, err.current);
+    if (owner && owner !== this.metricId) return;
     if (err.collection === 'metrics') {
       this.base = err.current;
       this.draft = pickMetric(err.current);

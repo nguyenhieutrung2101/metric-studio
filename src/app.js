@@ -47,11 +47,22 @@ const VIEWS = {
 export async function start(rootEl) {
   const repo = new LocalRepository();
   await repo.init();
+  const startupInfo = repo.describe();
   const store = new Store();
   const selectors = createSelectors(store);
+
+  // A database that exists but could not be opened is not an empty one. The
+  // user's data is on disk; seeding a demo over it would let them edit a
+  // catalogue that is not theirs in a session that will never persist. Say
+  // what happened and let them choose.
+  if (!startupInfo.persistent && startupInfo.hasExistingData) {
+    const proceed = await recoveryScreen(rootEl, startupInfo);
+    if (!proceed) return null;
+  }
+
   const snapshot = await repo.loadAll();
   const isEmpty = !Object.values(snapshot).some((arr) => arr.length > 0);
-  if (isEmpty) {
+  if (isEmpty && !startupInfo.hasExistingData) {
     // The seed goes through the same schema boundary as any imported file.
     const parsed = parseSnapshot(buildDemoSnapshot());
     if (!parsed.ok) throw new Error(`Demo data is invalid: ${parsed.errors.join('; ')}`);
@@ -122,12 +133,49 @@ export async function start(rootEl) {
   });
   validation.onChange((index) => shell.setWarnings(index.bySeverity));
   onLanguageChange(() => window.location.reload());
-  if (!ctx.repoInfo.persistent) setTimeout(() => toast.info(t('io.storageMemory'), { duration: 6000 }), 800);
+  if (!ctx.repoInfo.persistent) setTimeout(() => toast.info(t(ctx.repoInfo.hasExistingData ? 'io.storageUnsaved' : 'io.storageMemory'), { duration: 8000 }), 800);
+  if (ctx.repoInfo.migration && ctx.repoInfo.migration.deduplicated > 0) {
+    setTimeout(() => toast.info(t('io.migrationDeduplicated', { n: ctx.repoInfo.migration.deduplicated }), { duration: 10000 }), 1400);
+  }
+  // A newer release in another tab took the database over; this tab can only
+  // watch. Say so the moment it happens rather than on the next failed save.
+  const watchSuperseded = setInterval(() => {
+    const now = repo.describe();
+    if (now.reason === 'superseded') {
+      clearInterval(watchSuperseded);
+      toast.error(t('io.storageSuperseded'), { duration: 60000, action: { label: t('io.reload'), onClick: () => window.location.reload() } });
+    }
+  }, 2000);
 
   validation.run();
   router.start();
   globalThis.__metricStudio = { ...ctx, metricDrawer }; // debugging / automation hook, no behaviour depends on it
   return ctx;
+}
+
+/**
+ * Shown instead of the app when the database exists but could not be opened.
+ * Resolves true if the user chooses to continue in memory (with an empty
+ * catalogue, never the demo), false if they retry, which reloads the page.
+ */
+function recoveryScreen(rootEl, info) {
+  return new Promise((resolve) => {
+    const reasonKey = { blocked: 'io.recovery.blocked', 'upgrade-failed': 'io.recovery.upgradeFailed', 'open-failed': 'io.recovery.openFailed', superseded: 'io.recovery.superseded' }[info.reason] || 'io.recovery.openFailed';
+    const panel = h('div', { class: 'recovery' },
+      h('div', { class: 'recovery-card' },
+        icon('warning', { size: 28 }),
+        h('h1', { text: t('io.recovery.title') }),
+        h('p', { text: t(reasonKey) }),
+        info.detail && h('p', { class: 'mono small muted', text: info.detail }),
+        h('p', { class: 'small', text: t('io.recovery.dataSafe') }),
+        h('div', { class: 'recovery-actions' },
+          btn(t('io.recovery.retry'), { kind: 'primary', icon: 'external', on: { click: () => { resolve(false); window.location.reload(); } } }),
+          btn(t('io.recovery.continue'), { on: { click: () => { panel.remove(); resolve(true); } } }),
+        ),
+      ),
+    );
+    rootEl.replaceChildren(panel);
+  });
 }
 
 /** Debounced validation after every store change; views subscribe to the index. */
