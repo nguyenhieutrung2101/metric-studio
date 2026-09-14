@@ -130,6 +130,10 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 
 .context-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex-wrap: wrap; }
 .ctx { position: relative; }
+.ctx-root { display: inline-flex; align-items: center; gap: 6px; }
+.ctx-root .ctx-icon { color: var(--text-3); }
+.ctx-root .combo-wide { min-width: 260px; flex: 0 1 340px; }
+.ctx-root .combo-input { height: var(--control-h-sm); font-size: var(--fs-sm); }
 .ctx-select { display: inline-flex; align-items: center; gap: 6px; height: var(--control-h-sm); padding: 0 8px 0 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); cursor: pointer; max-width: 360px; }
 .ctx-select:hover, .ctx-select.open { border-color: var(--border-strong); }
 .ctx-icon { color: var(--text-3); }

@@ -27,7 +27,7 @@ import { mountDimensionsView } from './features/dimensions/dimensions-view.js';
 import { mountStructureView } from './features/structure/structure-view.js';
 import { mountMasterDataView } from './features/master-data/master-data-view.js';
 import { mountImportExportView } from './features/import-export/import-export-view.js';
-import { mountWarningsView } from './features/warnings/warnings-view.js';
+import { mountQualityView } from './features/quality/quality-view.js';
 
 /**
  * Navigation follows the work — define, organise, connect, validate — not
@@ -38,7 +38,7 @@ const GROUPS = [
   { id: 'catalogue', pages: ['metrics'] },
   { id: 'structure', pages: ['structure', 'dimensions'] },
   { id: 'logic', pages: ['bindings', 'dependencies'] },
-  { id: 'quality', pages: ['warnings'] },
+  { id: 'quality', pages: ['quality'] },
 ];
 const SECONDARY = ['master-data', 'backup'];
 const VIEWS = {
@@ -49,8 +49,10 @@ const VIEWS = {
   dimensions: mountDimensionsView,
   'master-data': mountMasterDataView,
   backup: mountImportExportView,
-  warnings: mountWarningsView,
+  quality: mountQualityView,
 };
+// Old bookmarks keep working: a route that was renamed maps to its new page.
+const ALIASES = { warnings: 'quality' };
 const groupOf = (path) => GROUPS.find((g) => g.pages.includes(path)) || null;
 
 /**
@@ -139,8 +141,9 @@ export async function start(rootEl) {
   // to the node, root metric or table they left rather than to a blank view.
   const lastRoute = new Map();
   function mount(route) {
-    const path = VIEWS[route.path] ? route.path : 'metrics';
-    if (path === route.path) lastRoute.set(path, { ...route.params });
+    const requested = ALIASES[route.path] || route.path;
+    const path = VIEWS[requested] ? requested : 'metrics';
+    if (path === requested) lastRoute.set(path, { ...route.params });
     if (path !== active.path && active.path && metricDrawer.isDirty()) {
       router.revert();
       metricDrawer.guardThen(() => router.navigate(path, route.params));
@@ -186,7 +189,7 @@ export async function start(rootEl) {
 
   // ---------------------------------------------------------------- shell wiring
   shell.nav(router, (path) => lastRoute.get(path) || {});
-  shell.warningsBtn.addEventListener('click', () => router.navigate('warnings'));
+  shell.warningsBtn.addEventListener('click', () => router.navigate('quality', lastRoute.get('quality') || {}));
   shell.moreBtn.addEventListener('click', (e) => {
     openMenu(e.currentTarget, [
       ...SECONDARY.map((p) => ({ label: t(`nav.${p}`), icon: p === 'backup' ? 'download' : 'edit', active: active.path === p, onClick: () => router.navigate(p, lastRoute.get(p) || {}) })),
@@ -325,7 +328,7 @@ function buildShell(rootEl) {
       } else subnav.hidden = true;
       rootEl.classList.toggle('has-subnav', !subnav.hidden);
       moreBtn.classList.toggle('active', SECONDARY.includes(path));
-      warningsBtn.classList.toggle('active', path === 'warnings');
+      warningsBtn.classList.toggle('active', path === 'quality');
     },
     setWarnings(by) {
       const n = (by.error || 0) + (by.warning || 0);

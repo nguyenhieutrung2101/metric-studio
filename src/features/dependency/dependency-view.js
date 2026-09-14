@@ -8,33 +8,73 @@ import { DependencyService } from '../../services/dependency-service.js';
 import { splitNodeKey } from '../../core/models/binding.js';
 import { debounce } from '../../utils/debounce.js';
 import { worstSeverity } from '../../services/validation-service.js';
+import { pageHeader } from '../../ui/workspace/page-header.js';
+import { contextBar, contextSelect } from '../../ui/workspace/context-bar.js';
+import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
+import { createInsightsPanel, insightSection } from '../../ui/workspace/insights-panel.js';
+import { renderBindingInsights } from '../bindings/binding-insights.js';
 
 /**
- * Dependencies — focused subgraph around a root Metric × Scenario.
- * Never renders the whole catalogue; expand the fringe on demand.
+ * Dependencies — a focused subgraph around one root Metric × Scenario.
+ *
+ * Two rows above the canvas say two different things. The context bar
+ * chooses what the graph is about: the root metric and the scenario (or
+ * cross-scenario). The view bar chooses how it is drawn: how many levels
+ * down and up, graph or table. Neither hides rows, so there is no filter
+ * bar here.
+ *
+ * Selecting a node inspects it in the same Insights panel every workspace
+ * has — the binding, its references, its neighbours in this graph — and
+ * never opens the editor by itself. Double-click a node to re-root.
  */
 export function mountDependencyView(container, ctx) {
   const { store, selectors, services } = ctx;
   const dep = services.dependencies;
   const state = { metricId: null, scenarioId: (selectors.scenarios()[0] || {}).id || null, mode: 'same', depthDown: 3, depthUp: 1, expanded: new Set(), collapsed: new Set(), selected: null, graph: null };
 
-  // ---------------------------------------------------------------- toolbar
+  // ---------------------------------------------------------------- header + context
+  const statsEl = h('span', { class: 'muted small graph-stats' });
+  const header = pageHeader({ title: t('nav.dependencies'), subtitle: t('dep.subtitle'), meta: statsEl });
   const rootPicker = combobox({
     placeholder: t('dep.pickRoot'),
     className: 'combo-wide',
     search: (q) => selectors.suggestMetrics(q, 10).map((m) => ({ id: m.id, label: m.name, sub: m.code, meta: coverageText(m.id) })),
     onSelect: (item) => setRoot(item.id, { navigate: true }),
   });
-  const scenarioSeg = h('div', { class: 'seg', role: 'radiogroup' });
+  const scenarioCtx = contextSelect({
+    label: t('dep.scenario'),
+    icon: 'layers',
+    options: () => [
+      ...selectors.scenarios().map((s) => ({ value: s.id, label: s.code, sub: s.name })),
+      { value: 'cross', label: t('dep.cross'), sub: t('dep.crossTitle') },
+    ],
+    onChange: (v) => {
+      if (v === 'cross') state.mode = 'cross';
+      else { state.mode = 'same'; state.scenarioId = v; }
+      resetExpansion();
+      render({ navigate: true });
+    },
+  });
+  const context = contextBar(
+    h('div', { class: 'ctx ctx-root' }, icon('graph', { size: 14, className: 'ctx-icon' }), h('span', { class: 'ctx-label', text: t('dep.root') }), rootPicker.el),
+    scenarioCtx.el,
+    h('span', { class: 'spacer' }),
+    h('span', { class: 'ctx-hint muted small', text: t('dep.contextHint') }),
+  );
+
+  // ---------------------------------------------------------------- view controls
+  const modeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': t('dep.viewMode') });
   const depthDown = h('select', { class: 'input input-sm', title: t('dep.depthDown') }, [1, 2, 3, 4, 5].map((n) => h('option', { value: n, text: t('dep.depthDownOpt', { n }), selected: n === state.depthDown })));
   const depthUp = h('select', { class: 'input input-sm', title: t('dep.depthUp') }, [0, 1, 2, 3].map((n) => h('option', { value: n, text: t('dep.depthUpOpt', { n }), selected: n === state.depthUp })));
-  depthDown.addEventListener('change', () => { state.depthDown = Number(depthDown.value); state.expanded.clear(); state.collapsed.clear(); render(); });
-  depthUp.addEventListener('change', () => { state.depthUp = Number(depthUp.value); state.expanded.clear(); state.collapsed.clear(); render(); });
-  const statsEl = h('span', { class: 'muted small graph-stats' });
-  const modeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': t('dep.viewMode') });
-  const toolbar = h('div', { class: 'toolbar' }, modeSeg, rootPicker.el, scenarioSeg, depthDown, depthUp, h('span', { class: 'spacer' }), statsEl);
+  depthDown.addEventListener('change', () => { state.depthDown = Number(depthDown.value); resetExpansion(); render(); });
+  depthUp.addEventListener('change', () => { state.depthUp = Number(depthUp.value); resetExpansion(); render(); });
+  const tableSearch = h('input', { class: 'input search-input', type: 'search', placeholder: t('dep.tableSearch') });
+  const tableSearchWrap = h('div', { class: 'search', hidden: true }, icon('search', { className: 'search-icon' }), tableSearch);
+  const tableScenario = h('select', { class: 'input input-sm', hidden: true });
+  const tableCount = h('span', { class: 'muted small', hidden: true });
+  const viewBar = h('div', { class: 'view-bar' }, h('span', { class: 'view-bar-label', text: t('dep.viewMode') }), modeSeg, depthDown, depthUp, tableSearchWrap, tableScenario, h('span', { class: 'spacer' }), tableCount);
 
-  // ---------------------------------------------------------------- canvas + panel
+  // ---------------------------------------------------------------- canvas + table
   const canvasHost = h('div', { class: 'graph-host' });
   const legend = h('div', { class: 'graph-legend' },
     legendItem('source', t('binding.type.source')), legendItem('formula', t('binding.type.formula')), legendItem('assumption', t('binding.type.assumption')), legendItem('none', t('binding.type.none')),
@@ -43,14 +83,7 @@ export function mountDependencyView(container, ctx) {
   );
   const emptyState = h('div', { class: 'empty graph-empty' }, icon('graph', { size: 32 }), h('p', { text: t('dep.empty') }), h('div', { class: 'suggest-list' }));
   const truncatedNote = h('div', { class: 'graph-note', role: 'status', hidden: true });
-  const panel = h('aside', { class: 'pane side-panel', hidden: true });
   const graphArea = h('div', { class: 'graph-area' }, canvasHost, truncatedNote, legend, emptyState);
-  // The edge table: every dependency as one flat row, the same rows the CSV
-  // export writes. The graph is one picture of these; this is the list.
-  const tableSearch = h('input', { class: 'input search-input', type: 'search', placeholder: t('dep.tableSearch') });
-  const tableScenario = h('select', { class: 'input input-sm' });
-  const tableCount = h('span', { class: 'muted small' });
-  const tableToolbar = h('div', { class: 'toolbar sub' }, h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), tableSearch), tableScenario, h('span', { class: 'spacer' }), tableCount);
   const tableHead = h('div', { class: 'table-head edge-row' },
     h('span', { text: t('dep.col.targetScenario') }), h('span', { text: t('dep.col.target') }), h('span', { text: t('dep.col.type') }),
     h('span', { text: t('dep.col.sourceScenario') }), h('span', { text: t('dep.col.source') }), h('span', { class: 'num', text: t('dep.col.seq') }),
@@ -58,13 +91,23 @@ export function mountDependencyView(container, ctx) {
   );
   const tableEmpty = h('div', { class: 'empty', hidden: true }, icon('graph', { size: 28 }), h('p', { text: t('dep.tableEmpty') }));
   const tableHost = h('div', { class: 'list-host' });
-  const tableArea = h('div', { class: 'edge-table', hidden: true }, tableToolbar, tableHead, tableHost, tableEmpty);
-  const body = h('div', { class: 'dep-layout' }, graphArea, tableArea, panel);
-  const root = h('div', { class: 'view-single dep-view' }, toolbar, body);
-  container.appendChild(root);
+  const tableArea = h('div', { class: 'edge-table', hidden: true }, tableHead, tableHost, tableEmpty);
+  const main = h('section', { class: 'pane dep-main' }, graphArea, tableArea);
 
-  const tableState = { query: '', scenarioId: '' };
-  const table = new VirtualList(tableHost, { rowHeight: 36, keyOf: (r) => r.id, emptyNode: tableEmpty, renderRow: renderEdgeRow });
+  const insights = createInsightsPanel({ preferenceKey: 'dependencies', title: t('insights.title'), emptyText: t('dep.pickNode') });
+  const layout = workspaceLayout({ header: header.el, context: context.el, main, insights: insights.el, className: 'dep-ws' });
+  layout.el.insertBefore(viewBar, layout.body);
+  container.appendChild(layout.el);
+
+  const tableState = { query: '', scenarioId: '', selected: null };
+  const table = new VirtualList(tableHost, {
+    rowHeight: 'dense',
+    keyOf: (r) => r.id,
+    emptyNode: tableEmpty,
+    renderRow: renderEdgeRow,
+    onSelect: (r) => { tableState.selected = r ? r.id : null; renderTableInsights(r); },
+    onActivate: (r) => ctx.openMetric(r.targetMetricId, { section: 'bindings', scenarioId: r.targetScenarioId }),
+  });
   let viewMode = 'graph';
 
   function renderModeSeg() {
@@ -86,15 +129,18 @@ export function mountDependencyView(container, ctx) {
     const tableOn = viewMode === 'table';
     graphArea.hidden = tableOn;
     tableArea.hidden = !tableOn;
-    for (const el of [rootPicker.el, scenarioSeg, depthDown, depthUp]) el.hidden = tableOn;
+    for (const el of [depthDown, depthUp]) el.hidden = tableOn;
+    for (const el of [tableSearchWrap, tableScenario, tableCount]) el.hidden = !tableOn;
     if (tableOn) {
-      panel.hidden = true;
       refreshTable();
-    } else render({ keepView: true });
+      renderTableInsights(table.itemOf(tableState.selected));
+    } else {
+      render({ keepView: true });
+    }
   }
 
   function renderEdgeRow(r) {
-    return h('div', { class: ['edge-row', 'row', !r.resolved && 'unresolved'], role: 'row', tabindex: '-1', on: { click: () => ctx.openMetric(r.targetMetricId, { section: 'bindings', scenarioId: r.targetScenarioId }) } },
+    return h('div', { class: ['edge-row', 'row', !r.resolved && 'unresolved'], role: 'row', tabindex: '-1', dataset: { id: r.id }, title: t('dep.tableHint') },
       h('span', { class: 'mono', text: r.targetScenario }),
       h('span', { class: 'cell-two' }, h('span', { class: 'mono muted', text: r.targetCode }), h('span', { class: 'ellipsis', text: r.targetName })),
       h('span', null, bindingChip('', 'formula')),
@@ -113,7 +159,17 @@ export function mountDependencyView(container, ctx) {
     if (tableState.scenarioId) rows = rows.filter((r) => r.targetScenarioId === tableState.scenarioId);
     if (q) rows = rows.filter((r) => [r.targetCode, r.targetName, r.targetAliases, r.sourceCode, r.sourceName, r.sourceAliases, r.token, r.formulaText].some((v) => String(v || '').toLowerCase().includes(q)));
     table.setItems(rows);
+    table.setSelected(tableState.selected);
     tableCount.textContent = t('dep.tableCount', { n: formatNumber(rows.length), total: formatNumber(dep.edges().length) });
+  }
+
+  function renderTableInsights(row) {
+    if (!row) { insights.setContent(null); return; }
+    insights.setContent(renderBindingInsights(ctx, row.targetMetricId, row.targetScenarioId, {
+      onEdit: () => ctx.openMetric(row.targetMetricId, { section: 'bindings', scenarioId: row.targetScenarioId }),
+      onDependencies: () => { setMode('graph'); setRoot(row.targetMetricId, { scenarioId: row.targetScenarioId, navigate: true }); },
+      onReference: (metricId, scenarioId) => { setMode('graph'); setRoot(metricId, { scenarioId, navigate: true }); },
+    }));
   }
 
   function fillTableScenario() {
@@ -140,12 +196,12 @@ export function mountDependencyView(container, ctx) {
     return selectors.scenarios().map((s) => `${s.code}:${cov[s.id] ? t(`binding.type.${cov[s.id]}.short`) : '—'}`).join(' ');
   }
 
-  function renderScenarioSeg() {
-    clear(scenarioSeg);
-    for (const s of selectors.scenarios()) {
-      scenarioSeg.appendChild(h('button', { type: 'button', role: 'radio', class: ['seg-btn', state.mode === 'same' && state.scenarioId === s.id && 'active'], on: { click: () => { state.scenarioId = s.id; state.mode = 'same'; resetExpansion(); render({ navigate: true }); } } }, s.code));
+  function renderScenarioCtx() {
+    if (state.mode === 'cross') scenarioCtx.setValue('cross', t('dep.cross'));
+    else {
+      const s = store.get('scenarios', state.scenarioId);
+      scenarioCtx.setValue(state.scenarioId, s ? s.code : '—');
     }
-    scenarioSeg.appendChild(h('button', { type: 'button', role: 'radio', class: ['seg-btn', state.mode === 'cross' && 'active'], title: t('dep.crossTitle'), on: { click: () => { state.mode = 'cross'; resetExpansion(); render({ navigate: true }); } } }, t('dep.cross')));
   }
 
   function resetExpansion() {
@@ -188,7 +244,7 @@ export function mountDependencyView(container, ctx) {
 
   // ---------------------------------------------------------------- render
   function render({ keepView = false, navigate = false } = {}) {
-    renderScenarioSeg();
+    renderScenarioCtx();
     if (viewMode === 'table') {
       refreshTable();
       return;
@@ -200,7 +256,7 @@ export function mountDependencyView(container, ctx) {
     legend.hidden = !has;
     if (!has) {
       renderSuggestions();
-      panel.hidden = true;
+      insights.setContent(null);
       truncatedNote.hidden = true;
       statsEl.textContent = '';
       return;
@@ -213,7 +269,7 @@ export function mountDependencyView(container, ctx) {
     applyHighlight();
     const s = dep.stats();
     statsEl.textContent = t('dep.stats', { nodes: formatNumber(state.graph.nodes.size), edges: formatNumber(state.graph.edges.length), total: formatNumber(s.edges), cycles: s.cycles });
-    renderPanel();
+    renderNodeInsights();
   }
 
   function renderSuggestions() {
@@ -250,7 +306,7 @@ export function mountDependencyView(container, ctx) {
   function select(key) {
     state.selected = key;
     applyHighlight();
-    renderPanel();
+    renderNodeInsights();
   }
 
   function applyHighlight() {
@@ -262,62 +318,53 @@ export function mountDependencyView(container, ctx) {
     view.highlight({ selected: state.selected, down: DependencyService.reachable(state.selected, state.graph.edges, 'down'), up: DependencyService.reachable(state.selected, state.graph.edges, 'up') });
   }
 
-  function renderPanel() {
-    clear(panel);
+  /** The Insights panel for the selected node: its binding, plus its neighbours in this graph. */
+  function renderNodeInsights() {
     const key = state.selected;
     if (!key || !state.graph || !state.graph.nodes.has(key)) {
-      panel.hidden = true;
+      insights.setContent(null);
       return;
     }
-    panel.hidden = false;
     const node = state.graph.nodes.get(key);
     const m = node.metric;
-    const b = node.binding;
-    panel.append(h('div', { class: 'pane-head' }, h('span', { class: 'pane-title', text: m ? m.name : node.token || '?' }), btn('', { icon: 'close', size: 'sm', title: t('common.close'), on: { click: () => select(null) } })));
-    const content = h('div', { class: 'side-content' });
-    if (node.unknownScenario) {
-      content.append(h('p', { class: 'hint warn', text: t('dep.unknownScenarioHint', { code: node.scenarioCode || '?' }) }));
-      for (const e of state.graph.edges.filter((x) => x.to === key)) {
-        const from = state.graph.nodes.get(e.from);
-        if (from && from.metric) content.appendChild(h('button', { type: 'button', class: 'suggestion', on: { click: () => ctx.openMetric(from.metricId, { section: 'bindings', scenarioId: from.scenarioId }) } }, h('span', { class: 'mono muted', text: from.metric.code }), h('span', { text: t('dep.fixIn', { name: from.metric.name }) })));
-      }
-      panel.appendChild(content);
+    const users = state.graph.edges.filter((e) => e.to === key);
+    const fixList = () => h('ul', { class: 'insight-list' }, users.map((e) => {
+      const from = state.graph.nodes.get(e.from);
+      if (!from || !from.metric) return null;
+      return h('li', null, h('span', { class: 'mono muted', text: from.metric.code }), h('button', { type: 'button', class: 'link ellipsis', on: { click: () => ctx.openMetric(from.metricId, { section: 'bindings', scenarioId: from.scenarioId }) } }, t('dep.fixIn', { name: from.metric.name })));
+    }));
+    if (node.unknownScenario || !m) {
+      insights.setContent(h('div', { class: 'insight insight-sev-error' },
+        h('div', { class: 'insight-head' }, h('div', { class: 'insight-title', text: node.token || '?' }), h('div', { class: 'insight-sub' }, h('span', { class: 'tag', text: node.unknownScenario ? t('dep.unknownScenario') : t('dep.missing') }))),
+        insightSection(t('group.quality'), h('p', { class: 'insight-para', text: node.unknownScenario ? t('dep.unknownScenarioHint', { code: node.scenarioCode || '?' }) : t('dep.missingHint', { token: node.token }) }), fixList()),
+      ));
       return;
     }
-    if (!m) {
-      content.append(h('p', { class: 'hint warn', text: t('dep.missingHint', { token: node.token }) }));
-      const users = state.graph.edges.filter((e) => e.to === key);
-      for (const e of users) {
-        const from = state.graph.nodes.get(e.from);
-        if (from && from.metric) content.appendChild(h('button', { type: 'button', class: 'suggestion', on: { click: () => ctx.openMetric(from.metricId, { section: 'bindings', scenarioId: from.scenarioId }) } }, h('span', { class: 'mono muted', text: from.metric.code }), h('span', { text: t('dep.fixIn', { name: from.metric.name }) })));
-      }
-      panel.appendChild(content);
-      return;
-    }
-    content.append(
-      h('div', { class: 'side-row' }, h('span', { class: 'mono muted', text: m.code }), bindingChip(node.scenarioCode || '?', b && b.type !== 'none' ? b.type : null)),
-      m.definition && h('p', { class: 'side-def', text: m.definition }),
-    );
-    if (b && b.type === 'formula') content.append(h('div', { class: 'side-label', text: t('binding.formula') }), h('pre', { class: 'formula-pre', text: b.formulaText }));
-    if (b && b.type === 'source') content.append(h('div', { class: 'side-label', text: t('binding.type.source') }), h('p', { class: 'mono small', text: [b.source.system, b.source.dataset, b.source.field].filter(Boolean).join(' / ') || '—' }));
-    if (b && b.type === 'assumption') content.append(h('div', { class: 'side-label', text: t('binding.type.assumption') }), h('p', { class: 'small' }, h('strong', { text: b.assumption.value || '—' }), b.assumption.basis ? h('span', { class: 'muted', text: ` — ${b.assumption.basis}` }) : null));
+    const content = renderBindingInsights(ctx, m.id, node.scenarioId, {
+      onEdit: () => ctx.openMetric(m.id, { section: 'bindings', scenarioId: node.scenarioId }),
+      onReference: (metricId, scenarioId) => {
+        const k = `${metricId}|${scenarioId}`;
+        if (state.graph.nodes.has(k)) { select(k); view.centerOn(k); } else setRoot(metricId, { scenarioId, navigate: true });
+      },
+    });
+    if (!content) { insights.setContent(null); return; }
     const down = state.graph.edges.filter((e) => e.from === key);
-    const up = state.graph.edges.filter((e) => e.to === key);
     const relList = (edges, pick, label) => {
       if (!edges.length) return null;
-      return h('div', null, h('div', { class: 'side-label', text: `${label} (${edges.length})` }), h('ul', { class: 'rel-list' }, edges.map((e) => {
+      return h('div', null, h('div', { class: 'insight-heading', text: `${label} (${edges.length})` }), h('ul', { class: 'insight-list' }, edges.map((e) => {
         const other = state.graph.nodes.get(pick(e));
-        return h('li', null, h('button', { type: 'button', class: 'link', on: { click: () => select(pick(e)) } }, h('span', { class: 'mono muted', text: other && other.metric ? other.metric.code : '?' }), h('span', { text: other && other.metric ? other.metric.name : e.token })), e.isCrossScenario && h('span', { class: 'tag tag-cross', text: (other && other.scenarioCode) || '' }), !e.resolved && h('span', { class: 'tag tag-warn', text: t('dep.missing') }));
+        return h('li', null,
+          h('span', { class: 'mono muted', text: other && other.metric ? other.metric.code : '?' }),
+          h('button', { type: 'button', class: 'link ellipsis', on: { click: () => { select(pick(e)); view.centerOn(pick(e)); } } }, other && other.metric ? other.metric.name : e.token),
+          e.isCrossScenario && h('span', { class: 'tag tag-cross', text: (other && other.scenarioCode) || '' }),
+          !e.resolved && h('span', { class: 'tag tag-warn', text: t('dep.missing') }));
       })));
     };
-    content.append(relList(down, (e) => e.to, t('dep.dependsOn')), relList(up, (e) => e.from, t('dep.usedBy')));
-    const issues = ctx.validation.issuesForMetric(m.id).filter((i) => !i.scenarioId || i.scenarioId === node.scenarioId);
-    if (issues.length) content.append(h('div', { class: 'side-label', text: t('warnings.title') }), h('ul', { class: 'issue-list' }, issues.slice(0, 5).map((i) => h('li', { class: 'issue-item' }, h('span', { class: `sev-dot sev-${i.severity}` }), h('span', { text: ctx.describeIssue(i) })))));
-    content.append(h('div', { class: 'side-actions' },
-      btn(t('dep.openMetric'), { size: 'sm', icon: 'external', on: { click: () => ctx.openMetric(m.id, { section: 'bindings', scenarioId: node.scenarioId }) } }),
-      !node.isRoot && btn(t('dep.makeRoot'), { size: 'sm', icon: 'graph', on: { click: () => setRoot(m.id, { scenarioId: node.scenarioId, navigate: true }) } }),
-    ));
-    panel.appendChild(content);
+    const inGraph = h('div', { class: 'insight-section' }, h('div', { class: 'insight-heading', text: t('dep.inGraph') }), relList(down, (e) => e.to, t('dep.dependsOn')) || h('p', { class: 'insight-para muted', text: `${t('dep.dependsOn')}: 0` }), relList(users, (e) => e.from, t('dep.usedBy')) || h('p', { class: 'insight-para muted', text: `${t('dep.usedBy')}: 0` }));
+    const actions = content.querySelector('.insight-actions');
+    content.insertBefore(inGraph, actions);
+    if (!node.isRoot) actions.appendChild(btn(t('dep.makeRoot'), { size: 'sm', icon: 'graph', on: { click: () => setRoot(m.id, { scenarioId: node.scenarioId, navigate: true }) } }));
+    insights.setContent(content);
   }
 
   const schedule = debounce(() => render({ keepView: true }), 60);
@@ -348,6 +395,6 @@ export function mountDependencyView(container, ctx) {
     onShow() { if (viewMode === 'table') table.refresh(); },
     onDrawerClosed() {},
     onMetricOpened() {},
-    destroy() { offStore(); offValidation(); schedule.cancel(); onTableSearch.cancel(); table.destroy(); view.destroy(); root.remove(); },
+    destroy() { offStore(); offValidation(); schedule.cancel(); onTableSearch.cancel(); table.destroy(); view.destroy(); layout.el.remove(); },
   };
 }

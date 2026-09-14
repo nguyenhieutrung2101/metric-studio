@@ -157,6 +157,22 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .ref-view.ref-missing { box-shadow: inset 0 0 0 1px var(--danger); background: var(--danger-soft); cursor: default; }
 .ref-view.ref-ambiguous, .ref-view.ref-unknown-scenario { box-shadow: inset 0 0 0 1px var(--warning); background: var(--warning-soft); cursor: default; }
 .seg-count { color: var(--text-3); font-weight: 500; font-variant-numeric: tabular-nums; }
+/* KPI tiles: the numbers a workbench opens with. A tile that filters is a button; one that only informs is static. */
+.kpi-row { flex: none; display: flex; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.kpi { display: flex; flex-direction: column; align-items: flex-start; min-width: 112px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); font: inherit; color: inherit; text-align: left; cursor: pointer; transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease); }
+.kpi:hover { border-color: var(--border-strong); background: var(--surface-2); }
+.kpi.active { border-color: var(--accent); background: var(--accent-soft); }
+.kpi.static, .kpi.static:hover { cursor: default; border-color: var(--border); background: var(--surface); }
+.kpi-value { font-size: 20px; font-weight: 650; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.kpi-caption { font-size: var(--fs-xs); color: var(--text-2); }
+.kpi-error .kpi-value { color: var(--danger); }
+.kpi-warning .kpi-value { color: var(--warning); }
+.kpi-info .kpi-value { color: var(--accent); }
+.kpi-ok .kpi-value { color: var(--success); }
+/* View controls: how the workspace draws what the context chose — depth, graph or table. Not context, not filter. */
+.view-bar { flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 14px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.view-bar-label { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-3); margin-right: 2px; }
+.dep-main { position: relative; }
 .seg-btn.active .seg-count { color: inherit; opacity: 0.8; }
 .ctx-check { display: flex; align-items: center; gap: 8px; padding: 6px 12px; cursor: pointer; font-size: var(--fs-sm); }
 .ctx-check:hover { background: var(--surface-2); }
