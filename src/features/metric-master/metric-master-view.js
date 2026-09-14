@@ -411,6 +411,11 @@ export function mountMetricMasterView(container, ctx) {
       }
       const selected = route.params.selected;
       if (selected && store.has('metrics', selected) && selected !== state.selectedId) select(selected);
+      if (route.params.new) {
+        // A quick action from elsewhere ("New metric"): open the dialog once, then forget the flag.
+        ctx.router.setParams({ new: null });
+        newMetric(store.has('structureNodes', state.nodeId) ? state.nodeId : null);
+      }
       const metricId = route.params.metric;
       if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId);
     },

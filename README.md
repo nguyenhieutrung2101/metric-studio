@@ -40,11 +40,11 @@ dimensions to check performance.
 
 | | Question | Where in the app |
 | --- | --- | --- |
-| **Metric Master** | What is this metric? | default view; one record per metric, immutable id, `M.000123` code |
-| **Structural Hierarchy** | Where does it belong for governance? | left tree; folders with counters, drag & drop, multiple placements |
-| **Scenario Binding** | How is the value obtained in each scenario? | drawer → Bindings tabs, one per scenario; Source / Formula / Assumption / None |
-| **Dimension** | Along which axes can it be sliced? | drawer → Dimensions; More → Dimensions for member hierarchies |
-| **Dependency Graph** | What does it depend on mathematically? | Dependencies view, derived from Formula bindings, never edited by hand |
+| **Metric Master** | What is this metric? | Catalogue → Metric Master: one row per metric, immutable id, `M.000123` code; click inspects, double-click edits |
+| **Structural Hierarchy** | Where does it belong for governance? | Structure → Structure: the hierarchy as a workspace of its own (drag, rename, move, inspect); the same tree scopes the Metric Master grid |
+| **Scenario Binding** | How is the value obtained in each scenario? | Logic → Bindings: one row per metric, one cell per scenario; drawer → Bindings for editing; Source / Formula / Assumption / None |
+| **Dimension** | Along which axes can it be sliced? | Structure → Dimensions: dimension list, member hierarchy, inspector; drawer → Dimensions on the metric |
+| **Dependency Graph** | What does it depend on mathematically? | Logic → Dependencies, derived from Formula bindings, never edited by hand |
 
 Scenarios are yours to define under **More ▾ → Master data** — the demo ships
 with *TT* (actual) and *GD* (planning) as two examples, and a planning
@@ -91,13 +91,23 @@ execution order from without parsing formulas itself.
 
 ## Working in the app
 
-* `/` focuses search · `Enter` opens the first result · `Esc` closes the drawer
-* Views keep their state — scroll position, filters, the graph you were looking at — when you switch tabs and come back
+Every workspace is built the same way: a page header, a **context bar**
+(what the page is about — the structure group, the scenarios, the root
+metric), a **filter bar** (which rows are hidden; active filters show as
+chips), the main grid or tree, and an **Insights** panel on the right.
+
+* **Inspect frequently, edit intentionally.** A single click selects a row, a
+  cell or a node and shows it in Insights without opening anything. Double-click,
+  `Enter` or the *Edit* button opens the drawer.
+* The top bar is grouped by the work: **Overview · Catalogue · Structure · Logic
+  · Quality**; groups with several pages get a second row of tabs.
+* `/` focuses search · `Enter` opens the first result · `Esc` closes menus and the drawer · `↑ ↓` move the selection · `← →` walk across scenarios in the Bindings matrix
+* Views keep their state — selection, filters, scroll position, the graph you were looking at — when you switch pages and come back
 * Leaving a metric with unsaved changes, by any route, is refused with *Save all and open* / *Discard and open* on offer
 * `Ctrl/Cmd + S` saves the drawer (metric fields and the open binding tab)
-* Drag a metric row onto a structure group to move it; drag groups to reorder or nest them
-* Click the ⚠ badge for the warning center; click an issue to jump to it
-* More ▾ holds Dimensions, Master data (units, scenarios), Import / Export and the language switch (English / Tiếng Việt)
+* Drag a metric row onto a structure group to move it; drag groups and dimension members to reorganise them
+* Click the ⚠ badge for Quality; click an issue to inspect it, double-click to jump to it
+* More ▾ holds Master data (units, scenarios), Import / Export, density (comfortable / compact) and the language switch (English / Tiếng Việt)
 
 Saves use optimistic concurrency. If a record was changed elsewhere, the
 drawer shows what changed and offers *Reload latest* or an explicit
@@ -177,8 +187,10 @@ css/                  tokens, shell layout, components
 src/core/             models, store, selectors
 src/repositories/     contract + Memory / IndexedDB adapters, SharePoint skeleton
 src/services/         formula parser, dependency graph, validation, schema boundary, unit of work, CRUD services, backup
-src/features/         metric-master, bindings, dependency, dimensions, master-data, import-export, warnings
-src/ui/               dom helpers, i18n, router, drawer, virtual list, tree, graph, toast, components
+src/features/         overview, metric-master, structure, bindings, dependency, dimensions, quality, master-data, import-export
+src/ui/               dom helpers, i18n, router, density, drawer, virtual list, tree, graph, toast, components
+src/ui/workspace/     page header, context bar, insights panel, workspace layout — the grammar every page shares
+src/ui/filter/        filter bar + chips · src/ui/hierarchy/  the hierarchy pane Structure and Dimensions share
 src/data/seed.js      demo catalogue + large synthetic dataset
 tests/                node:test suites
 docs/ARCHITECTURE.md  architecture and decisions

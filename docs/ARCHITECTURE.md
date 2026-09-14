@@ -103,18 +103,24 @@ src/
   data/
     seed.js                      demo snapshot + large synthetic dataset generator
   features/
-    metric-master/               view (tree + table + drawer wiring), metric drawer
-    bindings/                    coverage view
-    dependency/                  focused graph view
-    dimensions/                  dimension master data
+    overview/                    landing page: counts, coverage, attention, recent, quick actions
+    metric-master/               worksheet (context, filters, grid, insights), metric drawer, metric insights
+    structure/                   the hierarchy as a workspace of its own
+    bindings/                    matrix worksheet + binding (cell) insights
+    dependency/                  focused graph / edge table with the shared inspector
+    dimensions/                  dimension list · member hierarchy · insights
+    quality/                     KPI tiles, issue list, issue inspector (was warnings/)
     master-data/                 units & scenarios
-    import-export/               backup, reset, large demo
-    warnings/                    warning center
+    import-export/               backup, CSV tables, reset, large demo
   ui/
     dom.js                       safe DOM helpers (no innerHTML with user strings)
     i18n.js                      UI strings (en / vi)
     router.js                    hash router
-    components/                  chip, confirm dialog, dropdown menu, collapsible section, combobox
+    density.js                   comfortable / compact, applied as html[data-density]
+    workspace/                   page-header, context-bar, insights-panel, workspace-layout
+    filter/                      filter-bar ("+ Filters" menu, chips), filter-chip
+    hierarchy/                   hierarchy-workspace: the tree pane Structure and Dimensions share
+    components/                  chip, confirm dialog, dropdown menu, collapsible section, combobox, chip input, reference picker
     drawer/drawer.js             right-side contextual drawer
     table/virtual-list.js        windowed list for long tables
     tree/tree.js                 structure / member tree with expand-collapse + drag/drop
@@ -528,23 +534,64 @@ list changes, since their columns are baked from it.
 
 ## 5. Screens
 
+### 5.1 One grammar
+
+Every page is assembled from the same parts (`src/ui/workspace/`,
+`src/ui/filter/`, `src/ui/hierarchy/`):
+
+```
+┌ page header: title · subtitle · count / meta · primary action ─────────────┐
+├ context bar: what the page is ABOUT (structure group, scenarios, root) ────┤
+├ filter bar: search · "+ Filters" menu · active filters as chips ───────────┤
+├──────────┬───────────────────────────────────────────┬─────────────────────┤
+│ side     │ main: virtualised grid / tree / canvas    │ Insights            │
+│ (tree)   │                                           │ (collapsible rail,  │
+│          │                                           │  resizable, remem-  │
+│          │                                           │  bered per page)    │
+└──────────┴───────────────────────────────────────────┴─────────────────────┘
+```
+
+Context and filter are kept on separate rows because they mean different
+things: a context changes what the numbers are about (coverage over *these*
+scenarios), a filter only hides rows. The distinction shows in the URL too —
+context lives in `?scenarios=` / `?node=` / `?metric=`, filters in
+`?coverage=` and friends.
+
+**Inspect frequently, edit intentionally.** One click selects a row, a cell
+or a node and renders it in the Insights panel; nothing opens. Double-click,
+`Enter` or the *Edit* button opens the metric drawer (unchanged: sections,
+binding tabs, formula editor, dirty guard). The drawer opens with only the
+section that was asked for expanded; the other section headers carry a
+badge (placements, dimensions, `bound/total` scenarios) so the rest is one
+click away, not a scroll.
+
+Density (`html[data-density]`, More ▾) switches the row, control and grid
+font tokens; every list reads its row height from the tokens at mount and on
+`density-change`.
+
+### 5.2 Routes
+
 | Route | Layout | Interaction |
 | --- | --- | --- |
-| `#/metrics` (default) | left: structure tree with counts · center: virtualised metric table · right: metric drawer | select node → filter list; click row → drawer; search (code, name, alias, definition) debounced; compact filters + collapsible advanced |
-| `#/bindings` | coverage table: Metric · TT · GD · Warnings | filter All / TT-only / GD-only / Both / None; row click opens drawer on Bindings |
-| `#/dependencies` | root picker + scenario (TT / GD / Cross) + depth; pan/zoom canvas; node panel | click node → highlight ancestors/descendants; double-click → re-root; expand/collapse fringe |
-| More ▾ `#/dimensions` | dimension list + member tree | add / rename / move members |
+| `#/overview` (default) | cards: catalogue counts · scenario coverage · requires attention · recently updated · quick actions | every number is a door: counts open the catalogue, coverage opens Bindings filtered the same way, an issue opens Quality, a recent metric opens Metric Master selected |
+| Catalogue `#/metrics` | context: structure group · side: navigator tree · main: metric grid · Insights: metric summary | click → inspect; double-click / Enter → drawer; `?node=`, `?selected=`, `?metric=`; `?new=1` opens the new-metric dialog once |
+| Structure `#/structure` | main: hierarchy pane (expand all / collapse all, drag, … menu) · Insights: group path, contents, direct metrics, actions | click → inspect; the same actions in the … menu and the panel; `?node=` |
+| Structure `#/dimensions` | side: dimension list · main: member hierarchy (same pane as Structure) · Insights: dimension or member | click a dimension → its members and summary; click a member → its details; `?dimension=`, `?member=` |
+| Logic `#/bindings` | context: scenarios in context · filter: coverage segment with counts, per-scenario type, warnings · main: matrix, one cell per scenario · Insights: metric or one binding | click row → metric; click cell → binding (formula with references linked to their own cells); double-click / Enter → drawer on that scenario; `← →` across scenarios; `?scenarios=TT,GD`, `?coverage=complete|partial|missing`, `?selected=`, `?scenario=` |
+| Logic `#/dependencies` | context: root · scenario / cross · view bar: depth ↓ ↑, graph / table · main: canvas or edge table · Insights: node binding + neighbours in this graph | click node → inspect + highlight ancestors/descendants; double-click → re-root; `+ / −` expand / collapse; table: click → inspect target, Enter → edit; `?metric=`, `?scenario=`, `?mode=cross`, `?view=table` |
+| Quality `#/quality` (`#/warnings` still works) | KPI tiles (errors · warnings · info filter; metrics affected · clean) · filter: severity, entity, rule, scenario · main: issues · Insights: what, about which metric / scenario / group / dimension, *Go to the problem* | click → inspect; double-click / Enter → jump; `?severity=` |
 | More ▾ `#/master-data` | units, scenarios | small tables |
-| More ▾ `#/backup` | JSON export / import, reset demo, large dataset | Excel staging is Phase 2 (documented placeholder) |
-| ⚠ badge `#/warnings` | warning center | click → jumps to the metric / binding / dimension |
+| More ▾ `#/backup` | JSON export / import, CSV tables, reset demo, large dataset | Excel staging is Phase 2 (documented placeholder) |
 
 Metric drawer sections: **Definition · Structure · Dimensions · Bindings
-(TT | GD tabs) · Advanced (collapsed)**. Binding fields appear only after a
-type is chosen. Missing references show suggestions and an explicit *Create
-draft metric* action that asks for a structure node.
+(one tab per scenario) · Advanced (collapsed)**. Binding fields appear only
+after a type is chosen. Missing references show suggestions and an explicit
+*Create draft metric* action that asks for a structure node.
 
 Keyboard: `Esc` closes drawer / menus; `Ctrl/Cmd+S` saves the drawer;
-`Enter` picks the highlighted suggestion; `/` focuses search.
+`Enter` picks the highlighted suggestion or opens the selection; `/` focuses
+search; `↑ ↓ Home End` move the selection in every grid; `← →` move across
+scenarios in the Bindings matrix.
 
 ---
 

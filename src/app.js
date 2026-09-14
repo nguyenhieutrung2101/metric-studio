@@ -21,6 +21,7 @@ import { debounce } from './utils/debounce.js';
 import { DENSITIES, getDensity, setDensity, applyDensity } from './ui/density.js';
 import { MetricDrawer } from './features/metric-master/metric-drawer.js';
 import { mountMetricMasterView } from './features/metric-master/metric-master-view.js';
+import { mountOverviewView } from './features/overview/overview-view.js';
 import { mountBindingsView } from './features/bindings/bindings-view.js';
 import { mountDependencyView } from './features/dependency/dependency-view.js';
 import { mountDimensionsView } from './features/dimensions/dimensions-view.js';
@@ -35,6 +36,7 @@ import { mountQualityView } from './features/quality/quality-view.js';
  * several pages gets a second row of tabs under the top bar.
  */
 const GROUPS = [
+  { id: 'overview', pages: ['overview'] },
   { id: 'catalogue', pages: ['metrics'] },
   { id: 'structure', pages: ['structure', 'dimensions'] },
   { id: 'logic', pages: ['bindings', 'dependencies'] },
@@ -42,6 +44,7 @@ const GROUPS = [
 ];
 const SECONDARY = ['master-data', 'backup'];
 const VIEWS = {
+  overview: mountOverviewView,
   metrics: mountMetricMasterView,
   bindings: mountBindingsView,
   dependencies: mountDependencyView,
@@ -97,7 +100,7 @@ export async function start(rootEl) {
   const services = { metrics, structure, bindings, dimensions, dependencies, backup, presence };
 
   const validation = createValidationRunner({ store, selectors, dependencies });
-  const router = createRouter({ defaultPath: 'metrics' });
+  const router = createRouter({ defaultPath: 'overview' });
   const shell = buildShell(rootEl);
   const toast = createToast(shell.toastHost);
   const drawer = createDrawer(shell.drawerHost);
@@ -142,7 +145,7 @@ export async function start(rootEl) {
   const lastRoute = new Map();
   function mount(route) {
     const requested = ALIASES[route.path] || route.path;
-    const path = VIEWS[requested] ? requested : 'metrics';
+    const path = VIEWS[requested] ? requested : 'overview';
     if (path === requested) lastRoute.set(path, { ...route.params });
     if (path !== active.path && active.path && metricDrawer.isDirty()) {
       router.revert();
