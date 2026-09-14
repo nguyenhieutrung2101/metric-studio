@@ -1,5 +1,6 @@
 import { nodeKey, splitNodeKey, BindingType } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
+import { parseFormula, referenceIdentity } from './formula-parser.js';
 
 const UNKNOWN_SCENARIO = 'unknown-scenario:';
 
@@ -79,7 +80,13 @@ export class DependencyService {
       if (!store.has('metrics', b.metricId) || !store.has('scenarios', b.scenarioId)) continue;
       const from = nodeKey(b.metricId, b.scenarioId);
       const byTarget = new Map();
+      // Where each reference sits in the formula: its order of appearance and
+      // the operator or function it is an operand of. The edge table hands
+      // these to whoever builds execution order or lineage outside the app.
+      const placement = referencePlacement(b.formulaText);
+      let seq = 0;
       for (const ref of b.parsedReferences || []) {
+        seq += 1;
         let targetScenarioId = b.scenarioId;
         let scenarioResolved = true;
         if (ref.scenarioCode) {
@@ -106,6 +113,7 @@ export class DependencyService {
         // metric are one edge. The edge carries every slice that produced it
         // rather than silently keeping the first one.
         const existing = byTarget.get(to);
+        const where = placement.get(referenceIdentity(ref)) || { operator: '' };
         if (existing) {
           if (ref.dimensionContext) existing.dimensionContexts.push(ref.dimensionContext);
           continue;
@@ -125,6 +133,9 @@ export class DependencyService {
           isCrossScenario: targetScenarioId !== b.scenarioId,
           resolved: !!targetMetricId && scenarioResolved,
           scenarioResolved,
+          sequence: seq,
+          operator: where.operator,
+          formulaText: b.formulaText,
         };
         byTarget.set(to, edge);
         edges.push(edge);
@@ -138,6 +149,47 @@ export class DependencyService {
 
   edges() {
     return this._index().edges;
+  }
+
+  /**
+   * One row per dependency, flat, with names and codes resolved — the edge
+   * table people configure pipelines from. The graph is one picture of these
+   * rows; the formula text is kept on each so nothing is lost in flattening.
+   */
+  edgeRows() {
+    const { store } = this;
+    const scenarioCode = (id) => (store.get('scenarios', id) || {}).code || (typeof id === 'string' && id.startsWith('unknown-scenario:') ? id.slice('unknown-scenario:'.length) : '?');
+    const rows = [];
+    for (const e of this.edges()) {
+      const target = store.get('metrics', e.fromMetricId);
+      const source = e.targetMetricId ? store.get('metrics', e.targetMetricId) : null;
+      rows.push({
+        id: e.id,
+        bindingId: e.bindingId,
+        targetMetricId: e.fromMetricId,
+        targetCode: target ? target.code : '',
+        targetName: target ? target.name : '',
+        targetAliases: target ? (target.aliases || []).join(' ') : '',
+        targetScenarioId: e.fromScenarioId,
+        targetScenario: scenarioCode(e.fromScenarioId),
+        bindingType: BindingType.FORMULA,
+        sourceMetricId: e.targetMetricId,
+        sourceCode: source ? source.code : e.token,
+        sourceName: source ? source.name : '',
+        sourceAliases: source ? (source.aliases || []).join(' ') : '',
+        sourceScenarioId: e.targetScenarioId,
+        sourceScenario: scenarioCode(e.targetScenarioId),
+        sequence: e.sequence,
+        referenceType: e.isCrossScenario ? 'cross-scenario' : 'same-scenario',
+        dimensionContext: e.dimensionContexts.map((ctx) => ctx.map((p) => (p.member == null ? p.dimension : `${p.dimension}=${p.member}`)).join('; ')).join(' | '),
+        operator: e.operator || '',
+        resolved: e.resolved,
+        token: e.token,
+        formulaText: e.formulaText,
+      });
+    }
+    rows.sort((a, b) => a.targetScenario.localeCompare(b.targetScenario) || a.targetCode.localeCompare(b.targetCode) || a.sequence - b.sequence);
+    return rows;
   }
 
   edgesFrom(key) {
@@ -249,61 +301,64 @@ export class DependencyService {
       return depth < limit;
     };
 
-    // Downstream: what the root depends on.
-    const queueDown = [[root, 0]];
-    const visitedDown = new Set([root]);
+    // One breadth-first walk per direction, from any seed. The root seeds
+    // both; every node the user has expanded seeds both as well, because a
+    // "+" on the left of a node that was reached going down asks for its
+    // dependents, which a walk that only ever goes down from the root would
+    // never look at. Placement is the signed column (right of the root for
+    // dependencies, left for dependents); level is the distance used against
+    // the depth limits.
+    const walk = (dir, startKey, startPlacement, startLevel) => {
+      const queue = [[startKey, startPlacement, startLevel]];
+      const visited = new Set([startKey]);
+      const limit = dir === 'down' ? depthDown : depthUp;
+      while (queue.length) {
+        const [key, placement, level] = queue.shift();
+        const node = nodes.get(key);
+        if (!node) continue;
+        const next = dir === 'down' ? this.edgesFrom(key) : this.edgesTo(key);
+        const more = dir === 'down' ? 'hasMoreDown' : 'hasMoreUp';
+        if (!mayExpand(node, level, limit)) {
+          if (next.length) node[more] = true;
+          continue;
+        }
+        for (const e of next) {
+          const other = dir === 'down' ? e.to : e.from;
+          const otherPlacement = dir === 'down' ? placement + 1 : placement - 1;
+          if (edges.size >= edgeBudget || !addNode(other, otherPlacement)) {
+            node[more] = true;
+            truncated = truncated || edges.size >= edgeBudget;
+            continue;
+          }
+          addEdge(e);
+          if (!visited.has(other)) {
+            visited.add(other);
+            queue.push([other, otherPlacement, level + 1]);
+          }
+        }
+      }
+    };
+
     addNode(root, 0);
-    while (queueDown.length) {
-      const [key, depth] = queueDown.shift();
+    walk('down', root, 0, 0);
+    walk('up', root, 0, 0);
+    for (const key of expanded) {
       const node = nodes.get(key);
-      const out = this.edgesFrom(key);
-      if (!mayExpand(node, depth, depthDown)) {
-        if (out.length) node.hasMoreDown = true;
-        continue;
-      }
-      for (const e of out) {
-        // An edge whose endpoint the budget refused has nothing to point at,
-        // so it stays out of the layout and the node keeps its fringe marker.
-        if (edges.size >= edgeBudget || !addNode(e.to, depth + 1)) {
-          node.hasMoreDown = true;
-          truncated = truncated || edges.size >= edgeBudget;
-          continue;
-        }
-        addEdge(e);
-        if (!visitedDown.has(e.to)) {
-          visitedDown.add(e.to);
-          queueDown.push([e.to, depth + 1]);
-        }
-      }
+      if (!node || key === root) continue;
+      walk('down', key, node.depth, Math.abs(node.depth));
+      walk('up', key, node.depth, Math.abs(node.depth));
     }
 
-    // Upstream: what depends on the root.
-    const queueUp = [[root, 0]];
-    const visitedUp = new Set([root]);
-    while (queueUp.length) {
-      const [key, depth] = queueUp.shift();
-      const node = nodes.get(key);
-      const inc = this.edgesTo(key);
-      if (!mayExpand(node, depth, depthUp)) {
-        if (inc.length) node.hasMoreUp = true;
-        continue;
-      }
-      for (const e of inc) {
-        if (edges.size >= edgeBudget || !addNode(e.from, -(depth + 1))) {
-          node.hasMoreUp = true;
-          truncated = truncated || edges.size >= edgeBudget;
-          continue;
-        }
-        addEdge(e);
-        if (!visitedUp.has(e.from)) {
-          visitedUp.add(e.from);
-          queueUp.push([e.from, depth + 1]);
-        }
-      }
-    }
-
-    // Fringe flags for nodes reached but not expanded.
+    // Fringe flags for nodes reached but not expanded. A node that can never
+    // be expanded from here — external in same-scenario mode, missing, or in
+    // an unknown scenario — gets no marker: a "+" that does nothing is worse
+    // than none.
     for (const node of nodes.values()) {
+      if (node.missing || node.unknownScenario || node.external) {
+        node.hasMoreDown = false;
+        node.hasMoreUp = false;
+        continue;
+      }
       if (!node.hasMoreDown && this.edgesFrom(node.key).some((e) => !edges.has(e.id))) node.hasMoreDown = true;
       if (!node.hasMoreUp && this.edgesTo(node.key).some((e) => !edges.has(e.id))) node.hasMoreUp = true;
     }
@@ -439,4 +494,41 @@ export class DependencyService {
     }
     return { edges: idx.edges.length, nodes: nodes.size, unresolved: idx.edges.filter((e) => !e.resolved).length, crossScenario: idx.edges.filter((e) => e.isCrossScenario).length, cycles: this.findCycles().length };
   }
+}
+
+/**
+ * For every reference in a formula, the operator or function it is a direct
+ * operand of (`*`, `+`, `SUM`…), keyed by reference identity. First
+ * occurrence wins; groups are transparent.
+ */
+function referencePlacement(formulaText) {
+  const out = new Map();
+  const { ast } = parseFormula(formulaText || '');
+  const walk = (node, parentOp) => {
+    if (!node) return;
+    switch (node.type) {
+      case 'reference': {
+        const key = referenceIdentity(node);
+        if (!out.has(key)) out.set(key, { operator: parentOp });
+        break;
+      }
+      case 'binary':
+        walk(node.left, node.op);
+        walk(node.right, node.op);
+        break;
+      case 'unary':
+        walk(node.operand, node.op);
+        break;
+      case 'group':
+        walk(node.expression, parentOp);
+        break;
+      case 'call':
+        for (const a of node.args) walk(a, node.name);
+        break;
+      default:
+        break;
+    }
+  };
+  walk(ast, '');
+  return out;
 }

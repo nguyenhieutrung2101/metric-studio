@@ -2,6 +2,7 @@ import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { GraphView } from '../../ui/graph/graph-view.js';
 import { combobox } from '../../ui/components/combobox.js';
+import { VirtualList } from '../../ui/table/virtual-list.js';
 import { bindingChip } from '../../ui/components/chip.js';
 import { DependencyService } from '../../services/dependency-service.js';
 import { splitNodeKey } from '../../core/models/binding.js';
@@ -30,7 +31,8 @@ export function mountDependencyView(container, ctx) {
   depthDown.addEventListener('change', () => { state.depthDown = Number(depthDown.value); state.expanded.clear(); state.collapsed.clear(); render(); });
   depthUp.addEventListener('change', () => { state.depthUp = Number(depthUp.value); state.expanded.clear(); state.collapsed.clear(); render(); });
   const statsEl = h('span', { class: 'muted small graph-stats' });
-  const toolbar = h('div', { class: 'toolbar' }, rootPicker.el, scenarioSeg, depthDown, depthUp, h('span', { class: 'spacer' }), statsEl);
+  const modeSeg = h('div', { class: 'seg', role: 'radiogroup', 'aria-label': t('dep.viewMode') });
+  const toolbar = h('div', { class: 'toolbar' }, modeSeg, rootPicker.el, scenarioSeg, depthDown, depthUp, h('span', { class: 'spacer' }), statsEl);
 
   // ---------------------------------------------------------------- canvas + panel
   const canvasHost = h('div', { class: 'graph-host' });
@@ -42,9 +44,86 @@ export function mountDependencyView(container, ctx) {
   const emptyState = h('div', { class: 'empty graph-empty' }, icon('graph', { size: 32 }), h('p', { text: t('dep.empty') }), h('div', { class: 'suggest-list' }));
   const truncatedNote = h('div', { class: 'graph-note', role: 'status', hidden: true });
   const panel = h('aside', { class: 'pane side-panel', hidden: true });
-  const body = h('div', { class: 'dep-layout' }, h('div', { class: 'graph-area' }, canvasHost, truncatedNote, legend, emptyState), panel);
+  const graphArea = h('div', { class: 'graph-area' }, canvasHost, truncatedNote, legend, emptyState);
+  // The edge table: every dependency as one flat row, the same rows the CSV
+  // export writes. The graph is one picture of these; this is the list.
+  const tableSearch = h('input', { class: 'input search-input', type: 'search', placeholder: t('dep.tableSearch') });
+  const tableScenario = h('select', { class: 'input input-sm' });
+  const tableCount = h('span', { class: 'muted small' });
+  const tableToolbar = h('div', { class: 'toolbar sub' }, h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), tableSearch), tableScenario, h('span', { class: 'spacer' }), tableCount);
+  const tableHead = h('div', { class: 'table-head edge-row' },
+    h('span', { text: t('dep.col.targetScenario') }), h('span', { text: t('dep.col.target') }), h('span', { text: t('dep.col.type') }),
+    h('span', { text: t('dep.col.sourceScenario') }), h('span', { text: t('dep.col.source') }), h('span', { class: 'num', text: t('dep.col.seq') }),
+    h('span', { text: t('dep.col.refType') }), h('span', { text: t('dep.col.dimension') }), h('span', { text: t('dep.col.operator') }),
+  );
+  const tableEmpty = h('div', { class: 'empty', hidden: true }, icon('graph', { size: 28 }), h('p', { text: t('dep.tableEmpty') }));
+  const tableHost = h('div', { class: 'list-host' });
+  const tableArea = h('div', { class: 'edge-table', hidden: true }, tableToolbar, tableHead, tableHost, tableEmpty);
+  const body = h('div', { class: 'dep-layout' }, graphArea, tableArea, panel);
   const root = h('div', { class: 'view-single dep-view' }, toolbar, body);
   container.appendChild(root);
+
+  const tableState = { query: '', scenarioId: '' };
+  const table = new VirtualList(tableHost, { rowHeight: 36, keyOf: (r) => r.id, emptyNode: tableEmpty, renderRow: renderEdgeRow });
+  let viewMode = 'graph';
+
+  function renderModeSeg() {
+    clear(modeSeg);
+    for (const m of ['graph', 'table']) {
+      modeSeg.appendChild(h('button', { type: 'button', role: 'radio', class: ['seg-btn', viewMode === m && 'active'], 'aria-checked': String(viewMode === m), on: { click: () => setMode(m) } }, t(`dep.mode.${m}`)));
+    }
+  }
+
+  function setMode(m) {
+    if (viewMode === m) return;
+    viewMode = m;
+    ctx.router.setParams({ view: m === 'table' ? 'table' : null });
+    renderModeSeg();
+    applyMode();
+  }
+
+  function applyMode() {
+    const tableOn = viewMode === 'table';
+    graphArea.hidden = tableOn;
+    tableArea.hidden = !tableOn;
+    for (const el of [rootPicker.el, scenarioSeg, depthDown, depthUp]) el.hidden = tableOn;
+    if (tableOn) {
+      panel.hidden = true;
+      refreshTable();
+    } else render({ keepView: true });
+  }
+
+  function renderEdgeRow(r) {
+    return h('div', { class: ['edge-row', 'row', !r.resolved && 'unresolved'], role: 'row', tabindex: '-1', on: { click: () => ctx.openMetric(r.targetMetricId, { section: 'bindings', scenarioId: r.targetScenarioId }) } },
+      h('span', { class: 'mono', text: r.targetScenario }),
+      h('span', { class: 'cell-two' }, h('span', { class: 'mono muted', text: r.targetCode }), h('span', { class: 'ellipsis', text: r.targetName })),
+      h('span', null, bindingChip('', 'formula')),
+      h('span', { class: ['mono', r.referenceType === 'cross-scenario' && 'tag tag-cross'], text: r.sourceScenario }),
+      h('span', { class: 'cell-two' }, h('span', { class: 'mono muted', text: r.sourceCode }), h('span', { class: ['ellipsis', !r.resolved && 'danger'], text: r.resolved ? r.sourceName : t('dep.unresolved') })),
+      h('span', { class: 'num', text: String(r.sequence) }),
+      h('span', { class: 'muted small', text: r.referenceType === 'cross-scenario' ? t('dep.crossEdge') : t('dep.sameEdge') }),
+      h('span', { class: 'mono small ellipsis', text: r.dimensionContext }),
+      h('span', { class: 'mono small', text: r.operator }),
+    );
+  }
+
+  function refreshTable() {
+    const q = tableState.query.trim().toLowerCase();
+    let rows = dep.edgeRows();
+    if (tableState.scenarioId) rows = rows.filter((r) => r.targetScenarioId === tableState.scenarioId);
+    if (q) rows = rows.filter((r) => [r.targetCode, r.targetName, r.targetAliases, r.sourceCode, r.sourceName, r.sourceAliases, r.token, r.formulaText].some((v) => String(v || '').toLowerCase().includes(q)));
+    table.setItems(rows);
+    tableCount.textContent = t('dep.tableCount', { n: formatNumber(rows.length), total: formatNumber(dep.edges().length) });
+  }
+
+  function fillTableScenario() {
+    tableScenario.replaceChildren(h('option', { value: '', text: t('dep.anyScenario') }), ...selectors.scenarios().map((s) => h('option', { value: s.id, text: s.code, selected: s.id === tableState.scenarioId })));
+  }
+  const onTableSearch = debounce(() => { tableState.query = tableSearch.value; refreshTable(); }, 120);
+  tableSearch.addEventListener('input', onTableSearch);
+  tableScenario.addEventListener('change', () => { tableState.scenarioId = tableScenario.value; refreshTable(); });
+  fillTableScenario();
+  renderModeSeg();
 
   const view = new GraphView(canvasHost, {
     renderNode,
@@ -110,6 +189,10 @@ export function mountDependencyView(container, ctx) {
   // ---------------------------------------------------------------- render
   function render({ keepView = false, navigate = false } = {}) {
     renderScenarioSeg();
+    if (viewMode === 'table') {
+      refreshTable();
+      return;
+    }
     if (navigate) ctx.router.setParams({ metric: state.metricId, scenario: store.get('scenarios', state.scenarioId)?.code, mode: state.mode === 'cross' ? 'cross' : null });
     const has = state.metricId && store.has('metrics', state.metricId) && state.scenarioId;
     emptyState.hidden = !!has;
@@ -245,16 +328,26 @@ export function mountDependencyView(container, ctx) {
   return {
     update(route) {
       const p = route.params;
+      const wanted = p.view === 'table' ? 'table' : 'graph';
+      if (wanted !== viewMode) {
+        viewMode = wanted;
+        renderModeSeg();
+        applyMode();
+      }
       const scenario = p.scenario ? selectors.scenarioByCode(p.scenario) : null;
       if (scenario) state.scenarioId = scenario.id;
       state.mode = p.mode === 'cross' ? 'cross' : 'same';
       if (p.metric && store.has('metrics', p.metric)) {
         if (p.metric !== state.metricId) setRoot(p.metric, { scenarioId: scenario ? scenario.id : null });
         else render({ keepView: true });
+      } else if (state.metricId && store.has('metrics', state.metricId)) {
+        // A bare route (a top-bar link) does not mean "forget the root".
+        render({ keepView: true, navigate: true });
       } else render();
     },
+    onShow() { if (viewMode === 'table') table.refresh(); },
     onDrawerClosed() {},
     onMetricOpened() {},
-    destroy() { offStore(); offValidation(); schedule.cancel(); view.destroy(); root.remove(); },
+    destroy() { offStore(); offValidation(); schedule.cancel(); onTableSearch.cancel(); table.destroy(); view.destroy(); root.remove(); },
   };
 }

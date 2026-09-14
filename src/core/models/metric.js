@@ -31,7 +31,9 @@ export function createMetric(input = {}) {
     aliases: splitList(input.aliases),
     definition: trimOrEmpty(input.definition),
     unitId: input.unitId || null,
-    owner: trimOrEmpty(input.owner),
+    // Several people can own a metric. A legacy `owner` string is accepted
+    // and split, so older backups and the demo seed still load.
+    owners: splitList(input.owners != null ? input.owners : input.owner),
     role: METRIC_ROLES.includes(input.role) ? input.role : '',
     status: METRIC_STATUSES.includes(input.status) ? input.status : MetricStatus.DRAFT,
     tags: splitList(input.tags),

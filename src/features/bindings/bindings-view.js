@@ -113,8 +113,7 @@ export function mountBindingsView(container, ctx) {
   }
 
   function open(id, scenarioId = null) {
-    ctx.router.setParams({ metric: id });
-    ctx.openMetric(id, { section: 'bindings', scenarioId });
+    if (ctx.openMetric(id, { section: 'bindings', scenarioId })) ctx.router.setParams({ metric: id });
   }
 
   const onSearch = debounce(() => { state.query = searchInput.value; refresh(); }, 160);
@@ -125,6 +124,7 @@ export function mountBindingsView(container, ctx) {
   refresh();
 
   return {
+    onShow() { list.refresh(); },
     update(route) {
       if (route.params.coverage && route.params.coverage !== state.coverage) { state.coverage = route.params.coverage; markSeg(); refresh(); }
       const metricId = route.params.metric;

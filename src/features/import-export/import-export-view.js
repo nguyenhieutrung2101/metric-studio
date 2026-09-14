@@ -2,6 +2,7 @@ import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { confirmDialog } from '../../ui/components/confirm.js';
 import { buildDemoSnapshot, buildLargeSnapshot } from '../../data/seed.js';
+import { bindingRows, toCsv, BINDING_COLUMNS, EDGE_COLUMNS } from '../../services/export-tables.js';
 import { COLLECTIONS } from '../../core/collections.js';
 import { formatDateTime } from '../../utils/time.js';
 
@@ -29,6 +30,8 @@ export function mountImportExportView(container, ctx) {
     h('div', { class: 'card-head' }, h('h2', { text: t('io.export') })),
     h('p', { class: 'small muted', text: t('io.exportHint') }),
     btn(t('io.downloadJson'), { kind: 'primary', size: 'sm', icon: 'download', on: { click: exportJson } }),
+    btn(t('io.downloadBindingsCsv'), { size: 'sm', icon: 'download', title: t('io.bindingsCsvHint'), on: { click: () => downloadCsv('bindings', toCsv(bindingRows(store), BINDING_COLUMNS)) } }),
+    btn(t('io.downloadEdgesCsv'), { size: 'sm', icon: 'download', title: t('io.edgesCsvHint'), on: { click: () => downloadCsv('dependency-edges', toCsv(services.dependencies.edgeRows(), EDGE_COLUMNS)) } }),
   );
 
   const importCard = h('div', { class: 'card' },
@@ -61,6 +64,8 @@ export function mountImportExportView(container, ctx) {
     btn(t('io.excelImport'), { size: 'sm', disabled: true, icon: 'upload' }),
   );
 
+  // The workbook import card stays out of view until Phase 2 ships it.
+  excelCard.hidden = true;
   const root = h('div', { class: 'view-single view-scroll' }, h('div', { class: 'cards' }, storageCard, exportCard, importCard, restoreCard, demoCard, excelCard));
   container.appendChild(root);
 
@@ -70,6 +75,17 @@ export function mountImportExportView(container, ctx) {
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = h('a', { href: url, download: `metric-studio-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    ctx.toast.success(t('io.exported'));
+  }
+
+  function downloadCsv(name, csv) {
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: `metric-studio-${name}-${new Date().toISOString().slice(0, 10)}.csv` });
     document.body.appendChild(a);
     a.click();
     a.remove();

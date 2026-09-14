@@ -49,7 +49,8 @@ export class GraphView {
   setGraph(graph, { keepView = false } = {}) {
     this.graph = graph;
     const nodes = [...graph.nodes.values()].map((n) => ({ key: n.key, depth: n.depth }));
-    this.layout = layoutGraph(nodes, graph.edges);
+    // Tall enough for a two-line name plus the scenario row and the code.
+    this.layout = layoutGraph(nodes, graph.edges, { nodeHeight: 84 });
     const { positions, nodeWidth, nodeHeight, width, height } = this.layout;
     this.world.style.width = `${width}px`;
     this.world.style.height = `${height}px`;

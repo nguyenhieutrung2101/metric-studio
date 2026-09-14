@@ -5,7 +5,7 @@ import { VirtualList } from '../../ui/table/virtual-list.js';
 import { openMenu } from '../../ui/components/menu.js';
 import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
-import { METRIC_STATUSES, METRIC_ROLES } from '../../core/models/metric.js';
+import { METRIC_STATUSES } from '../../core/models/metric.js';
 import { debounce } from '../../utils/debounce.js';
 import { compareText } from '../../utils/text.js';
 import { getPreference, setPreference } from '../../utils/preferences.js';
@@ -58,12 +58,10 @@ export function mountMetricMasterView(container, ctx) {
   const newBtn = btn(t('mm.newMetric'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => newMetric() } });
   const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), searchInput), statusSelect, coverageSelect, advancedBtn, h('span', { class: 'spacer' }), newBtn);
 
-  const roleSelect = h('select', { class: 'input input-sm' }, h('option', { value: '', text: t('mm.filter.anyRole') }), METRIC_ROLES.map((r) => h('option', { value: r, text: t(`metric.role.${r}`) })));
   const unitSelect = h('select', { class: 'input input-sm' });
   const dimSelect = h('select', { class: 'input input-sm' });
   const warnCheck = h('input', { type: 'checkbox' });
   const advanced = h('div', { class: 'toolbar advanced', hidden: true },
-    h('label', { class: 'inline-field' }, h('span', { text: t('metric.field.role') }), roleSelect),
     h('label', { class: 'inline-field' }, h('span', { text: t('metric.field.unit') }), unitSelect),
     h('label', { class: 'inline-field' }, h('span', { text: t('mm.filter.dimension') }), dimSelect),
     h('label', { class: 'check-inline' }, warnCheck, h('span', { text: t('mm.filter.warningsOnly') })),
@@ -303,7 +301,6 @@ export function mountMetricMasterView(container, ctx) {
     for (const m of source) {
       if (hits && !hits.has(m.id)) continue;
       if (state.status && m.status !== state.status) continue;
-      if (state.role && m.role !== state.role) continue;
       if (state.unitId && m.unitId !== state.unitId) continue;
       if (state.coverage && selectors.coverageClass(m.id) !== state.coverage) continue;
       if (state.dimensionId && !selectors.metricDimensions(m.id).some((l) => l.dimensionId === state.dimensionId)) continue;
@@ -356,7 +353,6 @@ export function mountMetricMasterView(container, ctx) {
   });
   statusSelect.addEventListener('change', () => { state.status = statusSelect.value; refreshList({ keepScroll: false }); });
   coverageSelect.addEventListener('change', () => { state.coverage = coverageSelect.value; refreshList({ keepScroll: false }); });
-  roleSelect.addEventListener('change', () => { state.role = roleSelect.value; refreshList({ keepScroll: false }); });
   unitSelect.addEventListener('change', () => { state.unitId = unitSelect.value; refreshList({ keepScroll: false }); });
   dimSelect.addEventListener('change', () => { state.dimensionId = dimSelect.value; refreshList({ keepScroll: false }); });
   warnCheck.addEventListener('change', () => { state.warningsOnly = warnCheck.checked; refreshList({ keepScroll: false }); });
@@ -372,7 +368,6 @@ export function mountMetricMasterView(container, ctx) {
     searchInput.value = '';
     statusSelect.value = '';
     coverageSelect.value = '';
-    roleSelect.value = '';
     unitSelect.value = '';
     dimSelect.value = '';
     warnCheck.checked = false;
@@ -386,8 +381,7 @@ export function mountMetricMasterView(container, ctx) {
 
   // ---------------------------------------------------------------- actions
   function openMetric(id) {
-    ctx.router.setParams({ metric: id });
-    ctx.openMetric(id);
+    if (ctx.openMetric(id)) ctx.router.setParams({ metric: id });
   }
 
   async function newMetric(nodeId = null) {
@@ -461,6 +455,10 @@ export function mountMetricMasterView(container, ctx) {
       }
       const metricId = route.params.metric;
       if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId);
+    },
+    onShow() {
+      // Hidden views have no height; the virtual list needs to measure again.
+      list.refresh();
     },
     onDrawerClosed() {
       ctx.router.setParams({ metric: null });

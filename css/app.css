@@ -109,3 +109,7 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .recovery-card h1 { margin: 10px 0 8px; font-size: 18px; }
 .recovery-card p { margin: 0 0 10px; line-height: 1.5; }
 .recovery-actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+
+/* Cached views: a hidden slot takes no space, a visible one is transparent to the layout. */
+.view-slot { display: contents; }
+.view-slot[hidden] { display: none; }

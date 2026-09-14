@@ -185,6 +185,7 @@ export class Repository {
 
   listScenarios() { return this.list('scenarios'); }
   saveScenario(s, expectedToken) { return this.save('scenarios', s, expectedToken); }
+  deleteScenario(id, expectedToken) { return this.remove('scenarios', id, expectedToken); }
 
   listUnits() { return this.list('units'); }
   saveUnit(u, expectedToken) { return this.save('units', u, expectedToken); }

@@ -12,9 +12,15 @@ repository layer is designed to be swapped for SharePoint later.
 ## Run it
 
 ```sh
+npm install          # one dev dependency: fake-indexeddb, for the storage tests
 npm start            # zero-dependency static server → http://localhost:8080
-npm test             # node:test suites over the pure modules (no browser needed)
+npm test             # node:test suites, including the IndexedDB adapter over fake-indexeddb
 ```
+
+The published site has no dependencies and no build step; `fake-indexeddb`
+exists only so that transaction order, unique indexes, schema upgrades and
+two-tab races are tested against a real IndexedDB implementation rather than
+against the in-memory adapter alone.
 
 `npm start` binds to the loopback interface, serves only `index.html`, `css/`
 and `src/`, and sends the same Content-Security-Policy as the deployed site,
@@ -36,13 +42,16 @@ dimensions to check performance.
 | --- | --- | --- |
 | **Metric Master** | What is this metric? | default view; one record per metric, immutable id, `M.000123` code |
 | **Structural Hierarchy** | Where does it belong for governance? | left tree; folders with counters, drag & drop, multiple placements |
-| **Scenario Binding** | How is the value obtained in TT / GD? | drawer → Bindings tabs; Source / Formula / Assumption / None |
+| **Scenario Binding** | How is the value obtained in each scenario? | drawer → Bindings tabs, one per scenario; Source / Formula / Assumption / None |
 | **Dimension** | Along which axes can it be sliced? | drawer → Dimensions; More → Dimensions for member hierarchies |
 | **Dependency Graph** | What does it depend on mathematically? | Dependencies view, derived from Formula bindings, never edited by hand |
 
-TT and GD are **bindings of the same metric**, not two catalogues. Legacy
-`TT-*` / `GD-*` codes are kept on the binding as metadata. Moving a metric in
-the structure never touches its formulas; saving a formula never moves it.
+Scenarios are yours to define under **More ▾ → Master data** — the demo ships
+with *TT* (actual) and *GD* (planning) as two examples, and a planning
+process can add as many as it needs. Each is a **binding of the same
+metric**, never a second catalogue. Legacy `TT-*` / `GD-*` codes are kept on
+the binding as metadata. Moving a metric in the structure never touches its
+formulas; saving a formula never moves it.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the full model, schemas,
 data flow and the decisions taken on ambiguous points.
@@ -56,14 +65,35 @@ data flow and the decisions taken on ambiguous points.
 [REVENUE | Product=HRC]                 dimension context (parsed, reserved for later)
 ```
 
+Nobody remembers every metric name, so the formula box does not ask them to:
+typing `[` (or Ctrl+Space, or *Insert a metric reference…*) opens a picker,
+and the chosen metric is inserted as a token. Every reference is then boxed
+in place — green when it resolves, red when nothing matches, amber when
+several do — so the variables read as fixed and checked while the operators
+and words between them stay free text.
+
 References are resolved when the binding is saved. A reference that matches
 nothing is flagged with suggestions and an explicit **Create draft metric**
 action that asks for a structure group; the app never invents metrics from a
 typo. Ambiguous matches are errors, not guesses.
 
+## Dependencies as a table
+
+The Dependencies view has a **Table** mode next to the graph: one row per
+reference inside a formula — target metric and scenario, source metric and
+scenario, sequence in the formula, same- or cross-scenario, dimension
+context, and the operator or function the reference is an operand of.
+**Import / Export** downloads the same rows as `Dependency edges (CSV)`,
+alongside a `Bindings table (CSV)` with one row per metric × scenario and the
+formula text. The two are meant to be kept side by side: the formula is the
+logic as written; the edge table is what a pipeline builds lineage and
+execution order from without parsing formulas itself.
+
 ## Working in the app
 
 * `/` focuses search · `Enter` opens the first result · `Esc` closes the drawer
+* Views keep their state — scroll position, filters, the graph you were looking at — when you switch tabs and come back
+* Leaving a metric with unsaved changes, by any route, is refused with *Save all and open* / *Discard and open* on offer
 * `Ctrl/Cmd + S` saves the drawer (metric fields and the open binding tab)
 * Drag a metric row onto a structure group to move it; drag groups to reorder or nest them
 * Click the ⚠ badge for the warning center; click an issue to jump to it
@@ -93,6 +123,10 @@ drawer shows what changed and offers *Reload latest* or an explicit
   for the same scenario, two placements in one group, or two links to one
   dimension. Duplicate business codes are allowed in and reported as findings,
   because legacy workbooks contain them.
+* **An upgrade never hides your data.** When the storage schema changes,
+  older data is migrated in place; if the database cannot be opened (an older
+  tab still holds it, or the upgrade fails) the app says so and offers to
+  retry, instead of showing a demo catalogue over data that is still on disk.
 * **Two writes cannot cross — including from two tabs.** Every mutation goes
   through one queue, and every expected token is compared again inside the
   transaction that writes, against the database rather than against this
@@ -171,5 +205,4 @@ enforced by unique indexes, a strict Content-Security-Policy, and
 failure-injection plus regression test suites (115 tests, `npm test`).
 
 Still open before a multi-user pilot: reconciliation after a partial batch on
-a non-atomic backend, integration tests against real IndexedDB, a CI merge
-gate, and the SharePoint adapter itself.
+a non-atomic backend, a CI merge gate, and the SharePoint adapter itself.

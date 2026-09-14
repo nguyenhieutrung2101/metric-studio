@@ -511,5 +511,81 @@ test('the drawer knows which editor is holding an unsaved change', async () => {
 });
 
 function pickMetricLike(m) {
-  return { name: m.name || '', code: m.code || '', aliases: [...(m.aliases || [])], unitId: m.unitId || null, definition: m.definition || '', owner: m.owner || '', role: m.role || '', status: m.status || 'draft', tags: [...(m.tags || [])] };
+  return { name: m.name || '', code: m.code || '', aliases: [...(m.aliases || [])], unitId: m.unitId || null, definition: m.definition || '', owners: [...(m.owners || [])], status: m.status || 'draft', tags: [...(m.tags || [])] };
 }
+
+// ------------------------------------------------------- wave 3: import keeps meaning
+
+test('a damaged sibling does not cost a stable-id reference its resolution after a rename', async () => {
+  const ctx = await createContext();
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.metricId === 'm-revenue' && x.scenarioId === TT);
+  const vol = snapshot.data.metrics.find((m) => m.id === 'm-volume');
+  const oldName = vol.name;
+  vol.name = 'Sản lượng đã đổi tên';
+  vol.code = 'M.999999';
+  vol.aliases = [];
+  b.formulaText = `[${oldName}] * [PRICE]`;
+  b.parsedReferences = [
+    { raw: `[${oldName}]`, token: oldName, metricId: 'm-volume', scenarioId: TT, status: 'resolved' },
+    null,
+  ];
+  const out = parseSnapshot(snapshot).data.bindings.find((x) => x.id === b.id);
+  const byToken = Object.fromEntries(out.parsedReferences.map((r) => [r.token, r]));
+  assert.equal(byToken[oldName].metricId, 'm-volume', 'the stable id survives the rename');
+  assert.equal(byToken[oldName].status, 'resolved');
+  assert.equal(byToken.PRICE.metricId, 'm-price', 'the damaged sibling is rebuilt from the text');
+});
+
+test('syntax errors are rebuilt from the formula text on import', async () => {
+  const ctx = await createContext();
+  const snapshot = JSON.parse(JSON.stringify(ctx.backup.exportSnapshot()));
+  const b = snapshot.data.bindings.find((x) => x.metricId === 'm-revenue' && x.scenarioId === TT);
+  b.formulaText = '1 +';
+  b.parsedReferences = [];
+  b.formulaErrors = [];
+  const out = parseSnapshot(snapshot).data.bindings.find((x) => x.id === b.id);
+  assert.equal(out.formulaErrors.length, 1, 'a broken formula never imports clean');
+  assert.match(out.formulaErrors[0].message, /Unexpected end/);
+});
+
+// ------------------------------------------------------- dependency edge table
+
+test('edge rows flatten each formula into one row per reference with sequence and operator', async () => {
+  const ctx = await createContext();
+  await ctx.bindings.setBinding('m-margin', TT, { type: 'formula', formulaText: 'SUM([REVENUE], [TT:OPEX]) * (1 + [GD:GROWTH_RATE])' });
+  const rows = ctx.dependencies.edgeRows().filter((r) => r.targetMetricId === 'm-margin' && r.targetScenarioId === TT);
+  assert.deepEqual(rows.map((r) => [r.sourceCode, r.sourceScenario, r.sequence, r.operator, r.referenceType]), [
+    ['M.000001', 'TT', 1, 'SUM', 'same-scenario'],
+    [ctx.store.get('metrics', 'm-opex').code, 'TT', 2, 'SUM', 'same-scenario'],
+    [ctx.store.get('metrics', 'm-growth-rate').code, 'GD', 3, '+', 'cross-scenario'],
+  ]);
+  assert.ok(rows.every((r) => r.formulaText.startsWith('SUM(')), 'the source text rides along');
+});
+
+test('the CSV export quotes every cell and keeps formulas intact', async () => {
+  const { toCsv, bindingRows, BINDING_COLUMNS, EDGE_COLUMNS } = await import('../src/services/export-tables.js');
+  const ctx = await createContext();
+  await ctx.bindings.setBinding('m-margin', TT, { type: 'formula', formulaText: '[REVENUE] - [OPEX], "quoted"\nline two' });
+  const csv = toCsv(bindingRows(ctx.store), BINDING_COLUMNS);
+  assert.ok(csv.startsWith('﻿"Metric_ID"'), 'BOM then a quoted header');
+  assert.ok(csv.includes('"[REVENUE] - [OPEX], ""quoted""\nline two"'), 'commas, quotes and newlines survive inside one cell');
+  const edges = toCsv(ctx.dependencies.edgeRows(), EDGE_COLUMNS);
+  const header = edges.split('\r\n')[0];
+  for (const col of ['Target_Metric_ID', 'Source_Scenario', 'Sequence', 'Operator_Function', 'Formula_Text']) assert.ok(header.includes(`"${col}"`), col);
+});
+
+test('expanding a node reached going down reveals its dependents, and vice versa', async () => {
+  const ctx = await createContext();
+  // REVENUE|TT is reached going down from MARGIN; GD REVENUE depends on it.
+  const g = ctx.dependencies.subgraph({ metricId: 'm-margin', scenarioId: TT, depthDown: 3, depthUp: 0 });
+  const revenue = g.nodes.get(`m-revenue|${TT}`);
+  assert.ok(revenue, 'revenue is in the graph');
+  assert.equal(revenue.hasMoreUp, true, 'it has a dependent the graph does not show');
+  assert.equal(g.nodes.has(`m-revenue|${GD}`), false);
+
+  const expanded = ctx.dependencies.subgraph({ metricId: 'm-margin', scenarioId: TT, depthDown: 3, depthUp: 0, expanded: new Set([`m-revenue|${TT}`]) });
+  assert.ok(expanded.nodes.has(`m-revenue|${GD}`), 'the "+" on the left of a downstream node does something');
+  assert.ok(expanded.edges.some((e) => e.from === `m-revenue|${GD}` && e.to === `m-revenue|${TT}`));
+  assert.ok(expanded.nodes.get(`m-revenue|${GD}`).depth < revenue.depth, 'dependents sit to the left of what they use');
+});

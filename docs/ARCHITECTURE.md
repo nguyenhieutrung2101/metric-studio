@@ -363,6 +363,46 @@ edges, so a node budget alone bounds nothing. Edges whose endpoint the budget
 refused are left out entirely and nodes left unconnected are dropped, so the
 layout never has to place an edge with one end missing.
 
+### 4.1c′ Where the data lives is where it is checked
+
+Serialising writes and comparing tokens inside the transaction protect one
+record at a time. Three more things had to move into the transaction:
+
+* **Requirements.** `UnitOfWork.require(collection, id)` names a record the
+  batch depends on — the parent a node is created under, the metric a binding
+  belongs to. The adapter reads it inside the writing transaction and refuses
+  with `NotFoundError` if it is gone. Without it, a tab could hang a child on
+  a parent another tab had just deleted.
+* **Cascade guards.** Deleting a metric collects its dependents from this
+  instance's records, then carries a guard that refuses if the database holds
+  one the collection missed. The guard hands the database's records to the
+  mirror and the cascade retries once with the complete set.
+* **Write order.** Deletes are issued before puts, so a batch that frees a
+  unique relationship and re-creates it is not refused by the index it is
+  about to satisfy — the promise the contract already made.
+
+The sequence that hands out canonical codes reads its floor from the
+database in the same transaction, because a mirror cannot know what another
+tab imported, and `replaceAll` clears the sequence inside its own
+transaction.
+
+### 4.1c″ Schema upgrades
+
+A unique index created over a store that already holds duplicates aborts
+the upgrade. That is what an earlier release's data can look like, so each
+relationship store is deduplicated inside the upgrade transaction first (the
+primary placement wins), and the index is created from the cursor's last
+callback. When the database still cannot be opened — an older tab holds it
+(`blocked`), the upgrade failed, or a newer tab took it over
+(`superseded`) — `describe()` says which, and the app shows a recovery
+screen with *Retry* and *Continue without saving*. It never seeds the demo
+over a database that exists: `hasExistingData` is true for every failure but
+"no IndexedDB at all".
+
+All of this is exercised in `tests/indexeddb.test.mjs` over
+`fake-indexeddb`: two repositories on one factory are two tabs of the app,
+sharing the database and nothing else.
+
 ### 4.1d The cache never outranks the source
 
 `parsedReferences` on a binding is derived from `formulaText`; the formula
@@ -371,11 +411,15 @@ file claim that a formula metric depends on nothing — and it would look
 correct, because the formula is still displayed and validation has nothing to
 complain about.
 
-So the boundary re-parses. Every formula binding's cache is compared against
-the formula by *reference identity*, not by count (a cache can be the right
-length and still name the wrong metric), and rebuilt from the text whenever it
-disagrees, resolving against the records in the file itself. A binding that is
-not a formula keeps no references at all. Each case is reported:
+So the boundary re-parses — reference by reference. Each reference the
+formula states is matched to the cache by *reference identity* (not by
+count: a cache can be the right length and still name the wrong metric). A
+cached entry whose stable id still exists keeps it, which is how a reference
+survives the rename of the metric it points at even when a sibling entry is
+damaged; anything the cache cannot answer is resolved against the records in
+the file. Syntax errors are always rebuilt from the text, because a broken
+formula must arrive flagged whatever its cache said. A binding that is not a
+formula keeps no references at all. Each case is reported:
 `REFERENCE_REPARSED`, `REFERENCE_DROPPED`, `REFERENCE_RESET`.
 
 Resolution is defined once, in `core/reference-lookup.js`, and used both by
@@ -445,6 +489,20 @@ development server that hands `.git` or `package.json` to everyone on the
 same café network is a real leak even when the deployed site is configured
 correctly. The allow-list is exported and tested rather than swept by hand.
 
+### 4.4b Two tables for the world outside
+
+`DependencyService.edgeRows()` flattens the graph into one row per reference:
+target and source metric and scenario, the reference's sequence in the
+formula, whether it crosses scenarios, its dimension context, and the
+operator or function it is a direct operand of (read off the AST; groups are
+transparent). The Dependencies view shows these rows as a table beside the
+graph, and Import / Export writes them as `Dependency_Edges` CSV next to a
+`Bindings` CSV that carries the formula text. Both are exported because
+neither replaces the other: the formula is the logic as its author wrote it;
+the edge table is what a pipeline needs to build lineage and execution order
+without a parser of its own. `Time_Context` is present in the export and
+empty — the model does not carry a time dimension yet.
+
 ### 4.5 What the editor owes the person typing
 
 A save is not instant, and people keep typing during one. The drawer sends a
@@ -454,7 +512,17 @@ if the draft is still byte-for-byte what was sent. Anything typed meanwhile
 survives and the editor stays dirty, so the next save builds on this one.
 Every save also carries the sequence number of the drawer that started it: a
 response that arrives after the user has opened a different metric updates
-nothing, because that editor is not the one that asked.
+nothing, because that editor is not the one that asked — and that holds for
+every binding write in a Save loop, for the conflict banner, and for
+*Reload latest*, which only ever reloads the metric that is open.
+
+Leaving an editor is guarded by one function, `guardThen(proceed)`, whatever
+the route out: a reference link, a row in the table, a tab in the top bar.
+The router keeps the previous route so a refused hash change can be put back
+without the view noticing. Views stay mounted once opened and are hidden
+rather than destroyed, so the scroll position, the filters and the graph a
+user left are still there on return; they are rebuilt only when the scenario
+list changes, since their columns are baked from it.
 
 ---
 

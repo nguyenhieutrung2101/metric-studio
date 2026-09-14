@@ -5,6 +5,7 @@
 export function createRouter({ defaultPath = 'metrics' } = {}) {
   const handlers = new Set();
   let current = parse(location.hash, defaultPath);
+  let previous = null;
 
   function parse(hash, fallback) {
     const raw = (hash || '').replace(/^#\/?/, '');
@@ -26,6 +27,7 @@ export function createRouter({ defaultPath = 'metrics' } = {}) {
   }
 
   window.addEventListener('hashchange', () => {
+    previous = current;
     current = parse(location.hash, defaultPath);
     notify();
   });
@@ -59,6 +61,18 @@ export function createRouter({ defaultPath = 'metrics' } = {}) {
       if (next === location.hash) return;
       history.replaceState(null, '', next);
       current = parse(location.hash, defaultPath);
+    },
+    /**
+     * Put the URL back where it was before the last change, without telling
+     * listeners: the view they show is still the right one. Used when a
+     * navigation is refused because an editor holds unsaved changes.
+     */
+    revert() {
+      if (!previous) return;
+      const back = build(previous.path, previous.params);
+      history.replaceState(null, '', back);
+      current = parse(location.hash, defaultPath);
+      previous = null;
     },
     onChange(fn) {
       handlers.add(fn);

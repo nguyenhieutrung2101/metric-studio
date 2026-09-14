@@ -5,14 +5,17 @@ import { combobox } from '../../ui/components/combobox.js';
 import { openMenu } from '../../ui/components/menu.js';
 import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
 import { statusChip, severityDot } from '../../ui/components/chip.js';
-import { METRIC_STATUSES, METRIC_ROLES } from '../../core/models/metric.js';
+import { METRIC_STATUSES } from '../../core/models/metric.js';
+import { chipInput } from '../../ui/components/chip-input.js';
+import { refPicker } from '../../ui/components/ref-picker.js';
+import { parseFormula, referenceIdentity } from '../../services/formula-parser.js';
 import { BindingType, BINDING_STATUSES } from '../../core/models/binding.js';
 import { ConflictError, tokenOf } from '../../repositories/repository.js';
 import { debounce } from '../../utils/debounce.js';
 import { formatDateTime } from '../../utils/time.js';
 import { worstSeverity } from '../../services/validation-service.js';
 
-const METRIC_FIELDS = ['name', 'code', 'aliases', 'unitId', 'definition', 'owner', 'role', 'status', 'tags'];
+const METRIC_FIELDS = ['name', 'code', 'aliases', 'unitId', 'definition', 'owners', 'status', 'tags'];
 
 /**
  * Metric detail drawer. Opened from every view; edits go through services.
@@ -140,6 +143,14 @@ export class MetricDrawer {
     this._updateDirty();
   }
 
+  /** Owners already used in the catalogue, for the chip suggestions. */
+  _knownOwners(query) {
+    const q = String(query || '').trim().toLowerCase();
+    const seen = new Map();
+    for (const m of this.ctx.store.list('metrics')) for (const o of m.owners || []) seen.set(o.toLowerCase(), o);
+    return [...seen.values()].filter((o) => !q || o.toLowerCase().includes(q)).sort().slice(0, 8);
+  }
+
   _openMenu(anchor) {
     const metric = this.base;
     openMenu(anchor, [
@@ -210,9 +221,13 @@ export class MetricDrawer {
       field(t('metric.field.definition'), h('textarea', { class: 'input', rows: 3, value: d.definition, on: { input: onInput('definition') } })),
       h('div', { class: 'field-row' },
         field(t('metric.field.status'), h('select', { class: 'input', on: { change: onInput('status') } }, METRIC_STATUSES.map((s) => h('option', { value: s, text: t(`metric.status.${s}`), selected: s === d.status })))),
-        field(t('metric.field.role'), h('select', { class: 'input', on: { change: onInput('role') } }, [h('option', { value: '', text: '—' }), ...METRIC_ROLES.map((r) => h('option', { value: r, text: t(`metric.role.${r}`), selected: r === d.role }))])),
+        field(t('metric.field.owners'), chipInput({
+          values: d.owners || [],
+          placeholder: t('drawer.ownersPlaceholder'),
+          suggest: (q) => this._knownOwners(q),
+          onChange: (owners) => { this.draft.owners = owners; this._updateDirty(); },
+        }).el, { hint: t('drawer.ownersHint') }),
       ),
-      field(t('metric.field.owner'), h('input', { class: 'input', type: 'text', value: d.owner, on: { input: onInput('owner') } })),
     );
   }
 
@@ -387,38 +402,88 @@ export class MetricDrawer {
     panel.appendChild(actions);
   }
 
+  /**
+   * The formula box.
+   *
+   * People do not remember metric names well enough to type them. Typing `[`
+   * (or Ctrl+Space, or the button) opens a picker; choosing inserts the
+   * reference as a token. A backdrop under the textarea then draws a box
+   * around every reference — green when it resolves, red when nothing matches,
+   * amber when several do — so a reference reads as something fixed and
+   * checked, while the operators and words around it stay free text.
+   */
   _renderFormulaEditor(container, state, setField) {
     const scenarioId = this.activeScenarioId;
     const d = state.draft;
-    const textarea = h('textarea', { class: 'input mono formula-input', rows: 3, value: d.formulaText, placeholder: '[VOLUME] * [PRICE]', spellcheck: false });
+    const backdrop = h('div', { class: 'formula-backdrop mono', 'aria-hidden': 'true' });
+    const textarea = h('textarea', { class: 'input mono formula-input', rows: 3, value: d.formulaText, placeholder: t('binding.formulaPlaceholder'), spellcheck: false, autocomplete: 'off' });
+    const editor = h('div', { class: 'formula-editor' }, backdrop, textarea);
     const refsBox = h('div', { class: 'refs' });
-    const insert = combobox({
-      placeholder: t('binding.insertReference'),
-      className: 'combo-sm',
+    const picker = refPicker({
+      host: editor,
       search: (q) => this.ctx.selectors.suggestMetrics(q, 8, new Set([this.metricId])).map((m) => ({ id: m.id, label: m.name, sub: m.code, meta: (m.aliases || [])[0] || '' })),
-      onSelect: (item, { clear: reset }) => {
-        reset();
+      onPick: (item) => {
         const m = this.ctx.store.get('metrics', item.id);
+        if (!m) return;
         const token = (m.aliases && m.aliases[0]) || m.code;
-        insertAtCursor(textarea, `[${token}]`);
-        textarea.dispatchEvent(new Event('input'));
+        replaceOpenBracket(textarea, `[${token}]`);
+        commit();
         textarea.focus();
       },
     });
-    const update = debounce(() => {
+
+    const paint = () => paintReferences(backdrop, textarea.value, state.preview);
+    const preview = debounce(() => {
       state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId);
+      paint();
       this._renderReferences(refsBox, state);
     }, 180);
-    textarea.addEventListener('input', () => {
+    const commit = () => {
       setField('formulaText', textarea.value);
-      update();
+      paint();
+      preview();
+    };
+
+    textarea.addEventListener('input', () => {
+      commit();
+      if (picker.isOpen()) {
+        const partial = openBracketQuery(textarea);
+        if (partial == null) picker.close();
+        else picker.filter(partial);
+      }
     });
+    textarea.addEventListener('scroll', () => { backdrop.scrollTop = textarea.scrollTop; backdrop.scrollLeft = textarea.scrollLeft; });
+    textarea.addEventListener('keydown', (e) => {
+      if (picker.handleKey(e)) { e.preventDefault(); e.stopPropagation(); return; }
+      if (e.key === '[') {
+        // Let the bracket land, then open the picker on what follows it.
+        setTimeout(() => picker.open(openBracketQuery(textarea) || ''), 0);
+      } else if (e.key === ' ' && e.ctrlKey) {
+        e.preventDefault();
+        if (openBracketQuery(textarea) == null) insertAtCursor(textarea, '[');
+        commit();
+        picker.open(openBracketQuery(textarea) || '');
+      }
+    });
+    textarea.addEventListener('blur', () => setTimeout(() => picker.close(), 150));
+
+    const insertBtn = btn(t('binding.insertReference'), { size: 'sm', icon: 'plus', title: 'Ctrl+Space', on: { click: () => {
+      textarea.focus();
+      if (openBracketQuery(textarea) == null) insertAtCursor(textarea, '[');
+      commit();
+      picker.open(openBracketQuery(textarea) || '');
+    } } });
     container.append(
-      field(t('binding.formula'), textarea, { required: true, hint: t('binding.formulaHint') }),
-      h('div', { class: 'formula-tools' }, insert.el),
+      field(t('binding.formula'), editor, { required: true, hint: t('binding.formulaHint') }),
+      h('div', { class: 'formula-tools' }, insertBtn, h('span', { class: 'formula-legend' },
+        h('span', { class: 'ref-swatch ok' }), h('span', { text: t('binding.legendResolved') }),
+        h('span', { class: 'ref-swatch missing' }), h('span', { text: t('binding.legendMissing') }),
+        h('span', { class: 'ref-swatch ambiguous' }), h('span', { text: t('binding.legendAmbiguous') }),
+      )),
       refsBox,
     );
     state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId);
+    paint();
     this._renderReferences(refsBox, state);
   }
 
@@ -514,27 +579,42 @@ export class MetricDrawer {
   }
 
   _openOther(metricId, scenarioId) {
+    this.guardThen(() => this.open(metricId, { section: 'bindings', scenarioId }));
+  }
+
+  /**
+   * Run `proceed` now if nothing is unsaved; otherwise refuse, point at the
+   * editor holding the change, and offer to save everything or discard it
+   * and then proceed. Every way of leaving this editor — a reference link,
+   * a row in the table, a tab in the top bar — goes through here, so none of
+   * them can throw away typing without a word.
+   * @returns {boolean} whether `proceed` ran immediately
+   */
+  guardThen(proceed) {
     const pending = this._pending();
-    if (pending.count) {
-      // Point at the editor that is holding things up, then offer both ways
-      // out rather than only the refusal.
-      this._revealPending(pending);
-      this.ctx.toast.info(t('drawer.saveFirstWhat', { what: this._pendingLabel(pending) }), {
-        duration: 8000,
-        actions: [
-          { label: t('drawer.saveAllAndGo'), onClick: async () => {
-            await this.save();
-            if (!this._isDirty()) this.open(metricId, { section: 'bindings', scenarioId });
-          } },
-          { label: t('drawer.discardAndGo'), onClick: () => {
-            this._discardChanges();
-            this.open(metricId, { section: 'bindings', scenarioId });
-          } },
-        ],
-      });
-      return;
+    if (!pending.count) {
+      proceed();
+      return true;
     }
-    this.open(metricId, { section: 'bindings', scenarioId });
+    this._revealPending(pending);
+    this.ctx.toast.info(t('drawer.saveFirstWhat', { what: this._pendingLabel(pending) }), {
+      duration: 8000,
+      actions: [
+        { label: t('drawer.saveAllAndGo'), onClick: async () => {
+          await this.save();
+          if (!this._isDirty()) proceed();
+        } },
+        { label: t('drawer.discardAndGo'), onClick: () => {
+          this._discardChanges();
+          proceed();
+        } },
+      ],
+    });
+    return false;
+  }
+
+  isDirty() {
+    return this.drawer.isOpen() && this._isDirty();
   }
 
   /** Bring the editor that is holding the unsaved change into view. */
@@ -926,7 +1006,7 @@ export class MetricDrawer {
 
 // ---------------------------------------------------------------- helpers
 function pickMetric(m) {
-  return { name: m.name || '', code: m.code || '', aliases: [...(m.aliases || [])], unitId: m.unitId || null, definition: m.definition || '', owner: m.owner || '', role: m.role || '', status: m.status || 'draft', tags: [...(m.tags || [])] };
+  return { name: m.name || '', code: m.code || '', aliases: [...(m.aliases || [])], unitId: m.unitId || null, definition: m.definition || '', owners: [...(m.owners || [])], status: m.status || 'draft', tags: [...(m.tags || [])] };
 }
 
 function sameMetric(a, b) {
@@ -997,4 +1077,52 @@ function insertAtCursor(textarea, text) {
   textarea.value = `${before}${pad}${text}${after}`;
   const pos = before.length + pad.length + text.length;
   textarea.setSelectionRange(pos, pos);
+}
+
+/**
+ * The text between the last unclosed `[` before the caret and the caret, or
+ * null when the caret is not inside an open reference.
+ */
+function openBracketQuery(textarea) {
+  const pos = textarea.selectionStart ?? textarea.value.length;
+  const before = textarea.value.slice(0, pos);
+  const open = before.lastIndexOf('[');
+  if (open < 0) return null;
+  if (before.lastIndexOf(']') > open) return null;
+  return before.slice(open + 1);
+}
+
+/** Replace the open `[partial` before the caret with a complete token. */
+function replaceOpenBracket(textarea, token) {
+  const pos = textarea.selectionStart ?? textarea.value.length;
+  const before = textarea.value.slice(0, pos);
+  const open = before.lastIndexOf('[');
+  const start = open >= 0 && before.lastIndexOf(']') < open ? open : pos;
+  const after = textarea.value.slice(pos);
+  textarea.value = `${textarea.value.slice(0, start)}${token}${after}`;
+  const caret = start + token.length;
+  textarea.setSelectionRange(caret, caret);
+}
+
+/**
+ * Mirror the formula text into the backdrop with each reference wrapped in a
+ * mark carrying its resolution status. Positions come from the tokenizer,
+ * statuses from the last preview, matched by reference identity.
+ */
+function paintReferences(backdrop, text, preview) {
+  const statusOf = new Map();
+  for (const r of (preview && preview.references) || []) statusOf.set(referenceIdentity(r), r.status);
+  const { references } = parseFormula(text);
+  const frag = document.createDocumentFragment();
+  let cursor = 0;
+  for (const r of references) {
+    if (r.start > cursor) frag.appendChild(document.createTextNode(text.slice(cursor, r.start)));
+    const status = statusOf.get(referenceIdentity(r)) || 'pending';
+    frag.appendChild(h('mark', { class: ['ref-mark', `ref-${status}`], text: text.slice(r.start, r.end) }));
+    cursor = r.end;
+  }
+  if (cursor < text.length) frag.appendChild(document.createTextNode(text.slice(cursor)));
+  // A trailing newline needs a visible line to keep heights in step.
+  if (text.endsWith('\n')) frag.appendChild(document.createTextNode(' '));
+  backdrop.replaceChildren(frag);
 }

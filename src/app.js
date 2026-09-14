@@ -88,10 +88,21 @@ export async function start(rootEl) {
   const ctx = {
     store, selectors, repo, services, validation, router, toast, repoInfo: repo.describe(),
     currentMetricId: null,
+    /**
+     * Open a metric in the drawer. Refused — with the ways out offered on a
+     * toast — when the drawer holds unsaved changes for a different metric,
+     * so a click in the table cannot silently discard typing.
+     * @returns {boolean} whether the drawer moved now
+     */
     openMetric(id, opts) {
-      metricDrawer.open(id, opts);
-      ctx.currentMetricId = id;
-      if (active.view && active.view.onMetricOpened) active.view.onMetricOpened(id);
+      const go = () => {
+        metricDrawer.open(id, opts);
+        ctx.currentMetricId = id;
+        if (active.view && active.view.onMetricOpened) active.view.onMetricOpened(id);
+      };
+      if (id !== ctx.currentMetricId && metricDrawer.isDirty()) return metricDrawer.guardThen(go);
+      go();
+      return true;
     },
     drawerClose: () => drawer.close({ force: true }),
     describeIssue: (issue) => describeIssue(issue),
@@ -103,23 +114,63 @@ export async function start(rootEl) {
   };
 
   // ---------------------------------------------------------------- views
+  // Views stay mounted once opened and are hidden rather than destroyed, so
+  // the scroll position, the filters and the graph a user left behind are
+  // still there when they come back. Switching away from an editor with
+  // unsaved changes is refused the same way a metric switch is.
   const active = { path: null, view: null };
+  const mounted = new Map();
+  // The last route each view was on, so a top-bar link brings the user back
+  // to the node, root metric or table they left rather than to a blank view.
+  const lastRoute = new Map();
   function mount(route) {
-    let path = VIEWS[route.path] ? route.path : 'metrics';
+    const path = VIEWS[route.path] ? route.path : 'metrics';
+    if (path === route.path) lastRoute.set(path, { ...route.params });
+    if (path !== active.path && active.path && metricDrawer.isDirty()) {
+      router.revert();
+      metricDrawer.guardThen(() => router.navigate(path, route.params));
+      return;
+    }
     if (path !== active.path) {
-      if (active.view) active.view.destroy();
-      clear(shell.viewHost);
+      let entry = mounted.get(path);
+      if (!entry) {
+        const host = h('div', { class: 'view-slot' });
+        shell.viewHost.appendChild(host);
+        entry = { host, view: VIEWS[path](host, ctx) };
+        mounted.set(path, entry);
+      }
+      for (const [p, m] of mounted) m.host.hidden = p !== path;
       active.path = path;
-      active.view = VIEWS[path](shell.viewHost, ctx);
+      active.view = entry.view;
       shell.setActive(path);
+      if (entry.view.onShow) entry.view.onShow();
       if (!route.params.metric && drawer.isOpen()) drawer.close({ force: true });
     }
     active.view.update(route);
   }
   router.onChange(mount);
+  // Views bake the scenario list into their columns and filters; when that
+  // list changes (or the whole catalogue is replaced) they start over.
+  store.events.on('change', (evt) => {
+    if (evt.collection !== 'scenarios' && evt.collection !== '*') return;
+    for (const [p, m] of mounted) {
+      if (p === active.path) continue;
+      m.view.destroy();
+      m.host.remove();
+      mounted.delete(p);
+    }
+    if (active.path && evt.collection === 'scenarios') {
+      const m = mounted.get(active.path);
+      m.view.destroy();
+      m.host.replaceChildren();
+      m.view = VIEWS[active.path](m.host, ctx);
+      active.view = m.view;
+      m.view.update(router.current);
+    }
+  });
 
   // ---------------------------------------------------------------- shell wiring
-  shell.nav(router, () => active.path);
+  shell.nav(router, (path) => lastRoute.get(path) || {});
   shell.warningsBtn.addEventListener('click', () => router.navigate('warnings'));
   shell.moreBtn.addEventListener('click', (e) => {
     openMenu(e.currentTarget, [
@@ -222,10 +273,14 @@ function buildShell(rootEl) {
   const links = new Map();
   return {
     viewHost, drawerHost, toastHost, warningsBtn, moreBtn,
-    nav(router) {
+    nav(router, rememberedParams) {
       clear(navEl);
       for (const p of PRIMARY) {
-        const a = h('a', { class: 'nav-link', href: router.build(p), text: t(`nav.${p}`) });
+        const a = h('a', { class: 'nav-link', href: router.build(p), text: t(`nav.${p}`), on: { click: (e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          router.navigate(p, rememberedParams(p));
+        } } });
         links.set(p, a);
         navEl.appendChild(a);
       }
