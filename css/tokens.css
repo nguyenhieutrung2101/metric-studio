@@ -51,7 +51,6 @@
   --dur-slow: 240ms;
 
   --topbar-h: 46px;
-  --subnav-h: 34px;
   --drawer-w: 540px;
   --tree-w: 272px;
   --side-w: 320px;
@@ -72,6 +71,7 @@
   --control-h: 30px;
   --control-h-sm: 28px;
   --pane-head-h: 40px;
+  --table-head-h: 30px;
 }
 html[data-density="compact"] {
   --row-h: 32px;

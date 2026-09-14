@@ -206,8 +206,12 @@ export function mountMetricMasterView(container, ctx) {
   );
   const empty = h('div', { class: 'empty', hidden: true }, icon('search', { size: 28 }), h('p', { text: t('mm.empty') }), btn(t('mm.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => newMetric() } }));
   const listHost = h('div', { class: 'list-host' });
-  const main = h('section', { class: 'pane list-pane' }, h('div', { class: 'list-meta' }, crumbs, h('span', { class: 'muted small list-hint', text: t('mm.rowHint') })), gridHead, listHost, empty);
+  const main = h('section', { class: 'pane list-pane' }, h('div', { class: 'list-meta' }, crumbs, h('span', { class: 'muted small list-hint', text: t('mm.rowHint') })), listHost, empty);
 
+  // One column model for header and rows: identity columns keep a readable
+  // minimum and stick to the left; the grid scrolls sideways past that.
+  const scenarioCount = selectors.scenarios().length;
+  const columns = { template: `96px minmax(200px, 1fr) 72px repeat(${scenarioCount}, 108px) 44px 28px`, minWidth: 28 + 96 + 200 + 72 + 108 * scenarioCount + 44 + 28 + 10 * (5 + scenarioCount) };
   const list = new VirtualList(listHost, {
     rowHeight: 'row',
     keyOf: (m) => m.id,
@@ -215,8 +219,10 @@ export function mountMetricMasterView(container, ctx) {
     renderRow,
     onSelect: (m) => select(m ? m.id : null),
     onActivate: (m) => openMetric(m.id),
+    header: gridHead,
+    minWidth: columns.minWidth,
   });
-  gridHead.style.gridTemplateColumns = `96px minmax(0, 1fr) 72px repeat(${selectors.scenarios().length}, 108px) 44px 28px`;
+  gridHead.style.gridTemplateColumns = columns.template;
 
   function renderRow(m) {
     const unit = m.unitId ? store.get('units', m.unitId) : null;

@@ -17,7 +17,15 @@ export class VirtualList {
    * @param {(item) => void} [opts.onActivate] double click / Enter: act on the
    *   row (open the editor).
    */
-  constructor(container, { rowHeight = 40, renderRow, keyOf = (x) => x.id, overscan = 8, emptyNode = null, onSelect = null, onActivate = null }) {
+  /**
+   * @param {HTMLElement} [opts.header] the column header. It lives INSIDE the
+   *   scroller, sticky at the top, so header and rows share one horizontal
+   *   scroll position and one column model; a vertical scrollbar cannot
+   *   push them out of line.
+   * @param {number} [opts.minWidth] the width below which the grid scrolls
+   *   sideways instead of squeezing its columns.
+   */
+  constructor(container, { rowHeight = 40, renderRow, keyOf = (x) => x.id, overscan = 8, emptyNode = null, onSelect = null, onActivate = null, header = null, minWidth = 0 }) {
     this.container = container;
     this._rowHeightSpec = rowHeight;
     this.rowHeight = resolveRowHeight(rowHeight);
@@ -30,10 +38,18 @@ export class VirtualList {
     this.onSelect = onSelect;
     this.onActivate = onActivate;
     this.selectedKey = null;
+    this.header = header;
+    this.headH = 0;
     this.spacer = h('div', { class: 'vlist-spacer' });
     this.rows = h('div', { class: 'vlist-rows' });
-    this.viewport = h('div', { class: 'vlist', tabindex: '0' }, this.spacer, this.rows);
+    this.viewport = h('div', { class: ['vlist', header && 'has-header'], tabindex: '0', role: 'grid' }, header, this.spacer, this.rows);
     container.appendChild(this.viewport);
+    if (header) {
+      header.classList.add('vlist-header');
+      this.headH = resolveHeaderHeight();
+      this.viewport.style.setProperty('--vlist-head', `${this.headH}px`);
+    }
+    this.setMinWidth(minWidth);
     // Selection is wired once, by delegation, so rows the views render need
     // no handlers of their own and the contract stays the same everywhere:
     // click selects, double-click / Enter activates, arrows move.
@@ -69,6 +85,12 @@ export class VirtualList {
     this._lastRange = [-1, -1];
   }
 
+  /** The grid's minimum width; narrower viewports scroll sideways. */
+  setMinWidth(px) {
+    this.minWidth = px || 0;
+    this.viewport.style.setProperty('--grid-min', this.minWidth ? `${this.minWidth}px` : '0px');
+  }
+
   setItems(items, { keepScroll = true } = {}) {
     this.items = items;
     this.spacer.style.height = `${items.length * this.rowHeight}px`;
@@ -85,17 +107,18 @@ export class VirtualList {
 
   scrollToIndex(index, { block = 'nearest' } = {}) {
     if (index < 0 || index >= this.items.length) return;
-    const top = index * this.rowHeight;
+    // Content coordinates: the sticky header occupies the first headH pixels.
+    const top = this.headH + index * this.rowHeight;
     const vh = this.viewport.clientHeight;
     const st = this.viewport.scrollTop;
     if (block === 'center') this.viewport.scrollTop = top - vh / 2 + this.rowHeight / 2;
-    else if (top < st) this.viewport.scrollTop = top;
+    else if (top - this.headH < st) this.viewport.scrollTop = top - this.headH;
     else if (top + this.rowHeight > st + vh) this.viewport.scrollTop = top + this.rowHeight - vh;
   }
 
   render(force = false) {
     const vh = this.viewport.clientHeight || 600;
-    const st = this.viewport.scrollTop;
+    const st = Math.max(0, this.viewport.scrollTop - this.headH);
     const start = Math.max(0, Math.floor(st / this.rowHeight) - this.overscan);
     const end = Math.min(this.items.length, Math.ceil((st + vh) / this.rowHeight) + this.overscan);
     if (!force && start === this._lastRange[0] && end === this._lastRange[1]) return;
@@ -171,6 +194,12 @@ export class VirtualList {
     if (this._ro) this._ro.disconnect();
     this.viewport.remove();
   }
+}
+
+function resolveHeaderHeight() {
+  const raw = typeof getComputedStyle === 'function' ? getComputedStyle(document.documentElement).getPropertyValue('--table-head-h') : '';
+  const px = parseInt(raw, 10);
+  return Number.isFinite(px) && px > 0 ? px : 30;
 }
 
 /** A number as given, or a density token read from the document. */

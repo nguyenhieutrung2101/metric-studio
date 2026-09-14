@@ -107,7 +107,7 @@ export function mountBindingsView(container, ctx) {
   const head = h('div', { class: 'table-head binding-row bmatrix-row' });
   const empty = h('div', { class: 'empty', hidden: true }, icon('layers', { size: 28 }), h('p', { text: t('bindings.empty') }));
   const listHost = h('div', { class: 'list-host' });
-  const main = h('section', { class: 'pane grid-pane' }, head, listHost, empty);
+  const main = h('section', { class: 'pane grid-pane' }, listHost, empty);
 
   const list = new VirtualList(listHost, {
     rowHeight: 'row',
@@ -116,6 +116,7 @@ export function mountBindingsView(container, ctx) {
     renderRow,
     onSelect: (m) => selectCell(m ? m.id : null, null),
     onActivate: (m) => open(m.id, state.scenarioId),
+    header: head,
   });
   // ← → walk across the scenarios of the selected row; the list handles ↑ ↓ Enter.
   list.viewport.addEventListener('keydown', (e) => {
@@ -127,14 +128,22 @@ export function mountBindingsView(container, ctx) {
     selectCell(state.selectedId, next < 0 ? null : cols[next].id);
   });
 
+  // Identity and every scenario cell keep a readable minimum; past that the
+  // matrix scrolls sideways with the header and identity columns pinned.
   function template() {
-    return `96px minmax(0, 1fr) ${scenarios().map(() => 'minmax(0, 1.2fr)').join(' ')} 120px 28px`;
+    return `96px minmax(200px, 1fr) ${scenarios().map(() => 'minmax(220px, 1.2fr)').join(' ')} 120px 28px`;
+  }
+
+  function minWidth() {
+    const n = scenarios().length;
+    return 28 + 96 + 200 + 220 * n + 120 + 28 + 6 * (3 + n);
   }
 
   function renderHead() {
     // "Partial" cannot happen with one scenario in context; hide the dead segment.
     segButtons.get('partial').hidden = scenarios().length < 2;
     head.style.gridTemplateColumns = template();
+    list.setMinWidth(minWidth());
     head.replaceChildren(
       h('span', { class: 'col-code', text: t('mm.col.code') }),
       h('span', { class: 'col-name', text: t('mm.col.name') }),

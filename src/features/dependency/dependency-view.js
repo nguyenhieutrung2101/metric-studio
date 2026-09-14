@@ -91,7 +91,7 @@ export function mountDependencyView(container, ctx) {
   );
   const tableEmpty = h('div', { class: 'empty', hidden: true }, icon('graph', { size: 28 }), h('p', { text: t('dep.tableEmpty') }));
   const tableHost = h('div', { class: 'list-host' });
-  const tableArea = h('div', { class: 'edge-table', hidden: true }, tableHead, tableHost, tableEmpty);
+  const tableArea = h('div', { class: 'edge-table', hidden: true }, tableHost, tableEmpty);
   const main = h('section', { class: 'pane dep-main' }, graphArea, tableArea);
 
   const insights = createInsightsPanel({ preferenceKey: 'dependencies', title: t('insights.title'), emptyText: t('dep.pickNode') });
@@ -105,6 +105,8 @@ export function mountDependencyView(container, ctx) {
     keyOf: (r) => r.id,
     emptyNode: tableEmpty,
     renderRow: renderEdgeRow,
+    header: tableHead,
+    minWidth: 28 + 56 + 160 + 64 + 64 + 160 + 40 + 96 + 90 + 64 + 80,
     onSelect: (r) => { tableState.selected = r ? r.id : null; renderTableInsights(r); },
     onActivate: (r) => ctx.openMetric(r.targetMetricId, { section: 'bindings', scenarioId: r.targetScenarioId }),
   });

@@ -12,6 +12,7 @@ export const en = {
   'nav.quality': 'Quality',
   'nav.warningsTitle': '{errors} errors · {warnings} warnings · {info} info',
   'nav.more': 'More',
+  'nav.menu': 'Menu',
   'nav.language': 'Language',
   'group.catalogue': 'Catalogue',
   'group.overview': 'Overview',

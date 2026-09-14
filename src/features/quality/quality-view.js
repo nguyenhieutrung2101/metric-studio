@@ -61,7 +61,7 @@ export function mountQualityView(container, ctx) {
   const head = h('div', { class: 'table-head issue-row' }, h('span', { class: 'col-sev' }), h('span', { class: 'col-entity', text: t('warnings.entity') }), h('span', { class: 'col-msg', text: t('warnings.message') }), h('span', { class: 'col-code', text: t('warnings.rule') }));
   const empty = h('div', { class: 'empty', hidden: true }, icon('check', { size: 28 }), h('p', { text: t('warnings.empty') }));
   const listHost = h('div', { class: 'list-host' });
-  const main = h('section', { class: 'pane' }, head, listHost, empty);
+  const main = h('section', { class: 'pane' }, listHost, empty);
   const list = new VirtualList(listHost, {
     rowHeight: 'row',
     keyOf: (i) => i.id,
@@ -69,6 +69,8 @@ export function mountQualityView(container, ctx) {
     renderRow,
     onSelect: (i) => select(i ? i.id : null),
     onActivate: (i) => jump(i),
+    header: head,
+    minWidth: 28 + 24 + 200 + 280 + 160 + 30,
   });
 
   function entityLabel(issue) {

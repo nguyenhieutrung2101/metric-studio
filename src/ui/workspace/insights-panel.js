@@ -23,28 +23,68 @@ export function createInsightsPanel({ preferenceKey, title = t('insights.title')
   let w = clamp(prefs.width || width || 320);
 
   const titleEl = h('span', { class: 'insights-title', text: title });
-  const collapseBtn = btn('', { icon: 'chevronRight', size: 'sm', className: 'btn-ghost', title: t('insights.collapse'), on: { click: () => toggle() } });
+  const collapseBtn = btn('', { icon: 'chevronRight', size: 'sm', className: 'btn-ghost', title: t('insights.collapse'), on: { click: () => toggle(false, { focus: true }) } });
   const head = h('div', { class: 'insights-head' }, titleEl, h('span', { class: 'spacer' }), collapseBtn);
   const body = h('div', { class: 'insights-body' });
   const empty = h('div', { class: 'insights-empty' }, icon('info', { size: 20 }), h('p', { text: emptyText }));
-  const handle = h('div', { class: 'insights-handle', role: 'separator', 'aria-orientation': 'vertical', title: t('insights.resize') });
-  const rail = h('button', { type: 'button', class: 'insights-rail', title: t('insights.expand'), on: { click: () => toggle() } }, icon('chevronDown', { size: 14, className: 'rail-icon' }), h('span', { class: 'rail-label', text: title }));
-  const el = h('aside', { class: 'insights', 'aria-label': title }, handle, head, body, rail);
+  const handle = h('div', { class: 'insights-handle', role: 'separator', 'aria-orientation': 'vertical', 'aria-label': t('insights.resize'), 'aria-valuemin': String(MIN_W), 'aria-valuemax': String(MAX_W), tabindex: '0', title: t('insights.resize') });
+  const rail = h('button', { type: 'button', class: 'insights-rail', title: t('insights.expand'), 'aria-label': t('insights.expand'), 'aria-expanded': 'false', on: { click: () => toggle(true, { focus: true }) } }, icon('chevronDown', { size: 14, className: 'rail-icon' }), h('span', { class: 'rail-label', text: title }));
+  const panel = h('div', { class: 'insights-panel' }, head, body);
+  const el = h('aside', { class: 'insights', 'aria-label': title }, handle, panel, rail);
+
+  // `w` is what the person asked for and what is remembered. What the panel
+  // actually takes is decided against the space the workspace has: the main
+  // pane keeps a readable minimum, and when even the narrowest panel would
+  // not fit beside it the panel becomes an overlay that opens over the main
+  // pane from its rail. Neither adjustment touches the stored preference.
+  const MAIN_MIN = 480;
+  let overlay = false;
+  let effective = w;
+  // What the person chose on a wide screen. Opening or closing the overlay
+  // on a narrow one is a transient choice and is not written over it.
+  let desktopOpen = open;
 
   function remember() {
-    setPreference(`insights.${preferenceKey}`, { open, width: w });
+    setPreference(`insights.${preferenceKey}`, { open: desktopOpen, width: w });
+  }
+
+  function measure() {
+    const host = el.parentElement;
+    if (!host) return;
+    const side = host.querySelector(':scope > .pane.tree-pane:not(.rail-only)');
+    const sideW = side && host.classList.contains('narrow') ? 0 : side ? side.offsetWidth : 0;
+    const railW = host.classList.contains('narrow') ? 34 : 0;
+    const room = host.clientWidth - sideW - railW - MAIN_MIN;
+    const nextOverlay = room < MIN_W;
+    effective = nextOverlay ? w : Math.max(MIN_W, Math.min(w, room));
+    if (nextOverlay !== overlay) {
+      overlay = nextOverlay;
+      el.classList.toggle('overlay', overlay);
+      // Entering the overlay closes it (the rail stays); leaving it restores
+      // what the wide screen had.
+      open = overlay ? false : desktopOpen;
+      el.classList.toggle('collapsed', !open);
+      el.setAttribute('aria-expanded', String(open));
+      rail.setAttribute('aria-expanded', String(open));
+    }
+    el.style.setProperty('--insights-w', `${effective}px`);
   }
 
   function apply() {
     el.classList.toggle('collapsed', !open);
-    el.style.setProperty('--insights-w', `${w}px`);
     el.setAttribute('aria-expanded', String(open));
+    rail.setAttribute('aria-expanded', String(open));
+    collapseBtn.title = overlay && open ? t('common.close') : t('insights.collapse');
+    handle.setAttribute('aria-valuenow', String(w));
+    measure();
   }
 
-  function toggle(force) {
+  function toggle(force, { focus = false } = {}) {
     open = force == null ? !open : !!force;
+    if (!overlay) desktopOpen = open;
     apply();
     remember();
+    if (focus) (open ? collapseBtn : rail).focus();
   }
 
   function setContent(node) {
@@ -58,7 +98,8 @@ export function createInsightsPanel({ preferenceKey, title = t('insights.title')
   }
 
   // Drag the left edge to resize. Pointer capture keeps the drag alive when
-  // the pointer leaves the thin handle.
+  // the pointer leaves the thin handle; a cancelled or lost capture ends the
+  // drag the same way a release does.
   handle.addEventListener('pointerdown', (e) => {
     if (!open) return;
     e.preventDefault();
@@ -68,22 +109,57 @@ export function createInsightsPanel({ preferenceKey, title = t('insights.title')
     el.classList.add('resizing');
     const move = (ev) => {
       w = clamp(startW + (startX - ev.clientX));
-      el.style.setProperty('--insights-w', `${w}px`);
+      measure();
     };
     const up = () => {
       handle.removeEventListener('pointermove', move);
       handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      handle.removeEventListener('lostpointercapture', up);
       el.classList.remove('resizing');
+      handle.setAttribute('aria-valuenow', String(w));
       remember();
     };
     handle.addEventListener('pointermove', move);
     handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+    handle.addEventListener('lostpointercapture', up);
   });
   handle.addEventListener('dblclick', () => { w = clamp(width || 320); apply(); remember(); });
+  // The same resize from the keyboard: 16px per arrow, Home/End to the limits.
+  handle.addEventListener('keydown', (e) => {
+    if (!open) return;
+    const step = e.shiftKey ? 64 : 16;
+    if (e.key === 'ArrowLeft') w = clamp(w + step);
+    else if (e.key === 'ArrowRight') w = clamp(w - step);
+    else if (e.key === 'Home') w = MAX_W;
+    else if (e.key === 'End') w = MIN_W;
+    else return;
+    e.preventDefault();
+    apply();
+    remember();
+  });
+  // In overlay mode Escape closes the panel and hands focus back to the rail.
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay && open && !e.defaultPrevented) {
+      e.preventDefault();
+      e.stopPropagation();
+      toggle(false, { focus: true });
+    }
+  });
+  const ro = typeof ResizeObserver === 'function' ? new ResizeObserver(() => measure()) : null;
+  const observeHost = () => {
+    if (!el.parentElement) return;
+    if (ro) ro.observe(el.parentElement);
+    el.parentElement.addEventListener('layout-change', () => measure());
+    measure();
+  };
+  // The host is not known until the layout mounts the panel.
+  setTimeout(observeHost, 0);
 
   setContent(null);
   apply();
-  return { el, body, setTitle, setContent, open: () => toggle(true), close: () => toggle(false), toggle, isOpen: () => open };
+  return { el, body, setTitle, setContent, open: () => toggle(true), close: () => toggle(false), toggle, isOpen: () => open, measure, destroy: () => { if (ro) ro.disconnect(); } };
 }
 
 function clamp(v) {

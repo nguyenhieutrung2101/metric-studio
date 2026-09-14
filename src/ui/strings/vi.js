@@ -12,6 +12,7 @@ export const vi = {
   'nav.quality': 'Chất lượng',
   'nav.warningsTitle': '{errors} lỗi · {warnings} cảnh báo · {info} thông tin',
   'nav.more': 'Thêm',
+  'nav.menu': 'Menu',
   'nav.language': 'Ngôn ngữ',
   'group.catalogue': 'Danh mục',
   'group.overview': 'Tổng quan',

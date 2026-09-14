@@ -19,6 +19,8 @@ import { createDrawer } from './ui/drawer/drawer.js';
 import { openMenu } from './ui/components/menu.js';
 import { debounce } from './utils/debounce.js';
 import { DENSITIES, getDensity, setDensity, applyDensity } from './ui/density.js';
+import { NAV_GROUPS, UTILITY_PAGES, HOME_PAGE, groupOf, groupLabel, pageLabel, resolvePage } from './ui/nav/registry.js';
+import { disclosureNav, closeAll as closeNavs } from './ui/nav/disclosure.js';
 import { MetricDrawer } from './features/metric-master/metric-drawer.js';
 import { mountMetricMasterView } from './features/metric-master/metric-master-view.js';
 import { mountOverviewView } from './features/overview/overview-view.js';
@@ -30,19 +32,6 @@ import { mountMasterDataView } from './features/master-data/master-data-view.js'
 import { mountImportExportView } from './features/import-export/import-export-view.js';
 import { mountQualityView } from './features/quality/quality-view.js';
 
-/**
- * Navigation follows the work — define, organise, connect, validate — not
- * the collections underneath. Each group is one top-bar entry; a group with
- * several pages gets a second row of tabs under the top bar.
- */
-const GROUPS = [
-  { id: 'overview', pages: ['overview'] },
-  { id: 'catalogue', pages: ['metrics'] },
-  { id: 'structure', pages: ['structure', 'dimensions'] },
-  { id: 'logic', pages: ['bindings', 'dependencies'] },
-  { id: 'quality', pages: ['quality'] },
-];
-const SECONDARY = ['master-data', 'backup'];
 const VIEWS = {
   overview: mountOverviewView,
   metrics: mountMetricMasterView,
@@ -54,9 +43,6 @@ const VIEWS = {
   backup: mountImportExportView,
   quality: mountQualityView,
 };
-// Old bookmarks keep working: a route that was renamed maps to its new page.
-const ALIASES = { warnings: 'quality' };
-const groupOf = (path) => GROUPS.find((g) => g.pages.includes(path)) || null;
 
 /**
  * Bootstrap: repository → store → services → validation → shell → router → view.
@@ -145,10 +131,15 @@ export async function start(rootEl) {
   // The last route each view was on, so a top-bar link brings the user back
   // to the node, root metric or table they left rather than to a blank view.
   const lastRoute = new Map();
+  // The page each group was last on, so choosing a group in the top bar
+  // returns there rather than to the group's first page.
+  const lastPage = new Map();
   function mount(route) {
-    const requested = ALIASES[route.path] || route.path;
-    const path = VIEWS[requested] ? requested : 'overview';
+    const requested = resolvePage(route.path);
+    const path = requested && VIEWS[requested] ? requested : HOME_PAGE;
     if (path === requested) lastRoute.set(path, { ...route.params });
+    const group = groupOf(path);
+    if (group) lastPage.set(group.id, path);
     if (path !== active.path && active.path && metricDrawer.isDirty()) {
       router.revert();
       metricDrawer.guardThen(() => router.navigate(path, route.params));
@@ -193,11 +184,11 @@ export async function start(rootEl) {
   });
 
   // ---------------------------------------------------------------- shell wiring
-  shell.nav(router, (path) => lastRoute.get(path) || {});
+  shell.nav(router, { params: (path) => lastRoute.get(path) || {}, pageOfGroup: (g) => lastPage.get(g.id) || g.pages[0] });
   shell.warningsBtn.addEventListener('click', () => router.navigate('quality', lastRoute.get('quality') || {}));
   shell.moreBtn.addEventListener('click', (e) => {
     openMenu(e.currentTarget, [
-      ...SECONDARY.map((p) => ({ label: t(`nav.${p}`), icon: p === 'backup' ? 'download' : 'edit', active: active.path === p, onClick: () => router.navigate(p, lastRoute.get(p) || {}) })),
+      ...UTILITY_PAGES.map((p) => ({ label: pageLabel(p), icon: p === 'backup' ? 'download' : 'edit', active: active.path === p, onClick: () => router.navigate(p, lastRoute.get(p) || {}) })),
       { separator: true },
       { heading: t('nav.density') },
       ...DENSITIES.map((d) => ({ label: t(`density.${d}`), active: getDensity() === d, onClick: () => setDensity(d) })),
@@ -333,9 +324,33 @@ function describeIssue(issue) {
 }
 
 function buildShell(rootEl) {
-  const brand = h('div', { class: 'brand' }, icon('layers', { size: 18 }), h('span', { text: 'Metric Studio' }));
-  const navEl = h('nav', { class: 'primary-nav', 'aria-label': 'Primary' });
-  const subnav = h('nav', { class: 'subnav', 'aria-label': 'Section', hidden: true });
+  // One row. Brand · Group ▾ · Page ▾ (only when the group has several) ·
+  // utilities on the right. Nothing above the workspace changes height when
+  // the group changes, so the page header, the context bar and the drawer
+  // start where they started.
+  const brand = h('a', { class: 'brand', href: `#/${HOME_PAGE}`, title: t('nav.overview') }, icon('layers', { size: 18 }), h('span', { text: 'Metric Studio' }));
+  let navigateTo = null;
+  let pageOfGroup = (g) => g.pages[0];
+  const current = { path: null, group: null };
+  const groupNav = disclosureNav({
+    id: 'nav-groups', label: '', className: 'nav-seg-group',
+    items: () => NAV_GROUPS.map((g) => ({ path: pageOfGroup(g), href: `#/${pageOfGroup(g)}`, label: groupLabel(g.id), current: current.group && current.group.id === g.id })),
+    onSelect: (p) => navigateTo && navigateTo(p),
+  });
+  const pageNav = disclosureNav({
+    id: 'nav-pages', label: '', className: 'nav-seg-page',
+    items: () => (current.group ? current.group.pages : []).map((p) => ({ path: p, href: `#/${p}`, label: pageLabel(p), current: p === current.path })),
+    onSelect: (p) => navigateTo && navigateTo(p),
+  });
+  // Narrow screens: one button, the whole tree, no labels squeezed sideways.
+  const compactNav = disclosureNav({
+    id: 'nav-compact', label: t('nav.menu'), className: 'nav-compact', icon: 'more',
+    items: () => NAV_GROUPS.flatMap((g) => (g.pages.length > 1
+      ? [{ heading: groupLabel(g.id) }, ...g.pages.map((p) => ({ path: p, href: `#/${p}`, label: pageLabel(p), current: p === current.path, indent: true }))]
+      : [{ path: g.pages[0], href: `#/${g.pages[0]}`, label: groupLabel(g.id), current: current.group && current.group.id === g.id }])),
+    onSelect: (p) => navigateTo && navigateTo(p),
+  });
+  const navEl = h('nav', { class: 'primary-nav', 'aria-label': 'Primary' }, h('span', { class: 'nav-divider', 'aria-hidden': 'true' }), groupNav.el, h('span', { class: 'nav-divider nav-divider-page', 'aria-hidden': 'true' }), pageNav.el, compactNav.el);
   const warnCount = h('span', { class: 'badge', text: '0' });
   const warningsBtn = h('button', { type: 'button', class: 'topbar-btn warnings-btn', title: t('nav.warnings') }, icon('warning'), warnCount);
   const moreBtn = h('button', { type: 'button', class: 'topbar-btn', title: t('nav.more') }, h('span', { text: t('nav.more') }), icon('chevronDown', { size: 14 }));
@@ -343,49 +358,36 @@ function buildShell(rootEl) {
   const banner = h('div', { class: 'storage-banner', role: 'status', hidden: true });
   const viewHost = h('main', { class: 'view', id: 'view' });
   // The drawer lives inside the view, so its top edge is wherever the view
-  // starts — after the top bar, any banner, any second row — with no offset
-  // to keep in step by hand.
+  // starts — after the top bar and any banner — with no offset kept by hand.
   const drawerHost = h('div', { class: 'drawer-host' });
   viewHost.appendChild(drawerHost);
   const toastHost = h('div', { class: 'toast-host' });
-  rootEl.replaceChildren(topbar, subnav, banner, viewHost, toastHost);
-  const links = new Map();
-  let navigateTo = null;
-  const go = (p) => (e) => {
+  rootEl.replaceChildren(topbar, banner, viewHost, toastHost);
+  brand.addEventListener('click', (e) => {
     if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
     e.preventDefault();
-    if (navigateTo) navigateTo(p);
-  };
+    if (navigateTo) navigateTo(HOME_PAGE);
+  });
   return {
     viewHost, drawerHost, toastHost, warningsBtn, moreBtn,
-    nav(router, rememberedParams) {
-      navigateTo = (p) => router.navigate(p, rememberedParams(p));
-      clear(navEl);
-      for (const g of GROUPS) {
-        const first = g.pages[0];
-        const a = h('a', { class: 'nav-link', href: router.build(first), text: t(`group.${g.id}`), dataset: { group: g.id }, on: { click: go(first) } });
-        links.set(g.id, a);
-        navEl.appendChild(a);
-      }
+    nav(router, { params, pageOfGroup: remembered }) {
+      navigateTo = (p) => { closeNavs(); router.navigate(p, params(p)); };
+      pageOfGroup = remembered;
     },
     setActive(path) {
-      const group = groupOf(path);
-      for (const [id, a] of links) {
-        const on = group && group.id === id;
-        a.classList.toggle('active', on);
-        if (on) a.setAttribute('aria-current', 'page');
-        else a.removeAttribute('aria-current');
-      }
-      // The second row exists only for groups with more than one page, and
-      // remembers each page's last route like the top row does.
-      clear(subnav);
-      if (group && group.pages.length > 1) {
-        for (const p of group.pages) subnav.appendChild(h('a', { class: ['subnav-link', p === path && 'active'], href: `#/${p}`, text: t(`nav.${p}`), on: { click: go(p) } }));
-        subnav.hidden = false;
-      } else subnav.hidden = true;
-      rootEl.classList.toggle('has-subnav', !subnav.hidden);
-      moreBtn.classList.toggle('active', SECONDARY.includes(path));
+      current.path = path;
+      current.group = groupOf(path);
+      const utility = UTILITY_PAGES.includes(path);
+      groupNav.setLabel(current.group ? groupLabel(current.group.id) : utility ? t('nav.more') : '');
+      groupNav.button.classList.toggle('active', !!current.group);
+      const multi = !!current.group && current.group.pages.length > 1;
+      pageNav.el.hidden = !multi && !utility;
+      navEl.querySelector('.nav-divider-page').hidden = !multi && !utility;
+      pageNav.setLabel(multi ? pageLabel(path) : utility ? pageLabel(path) : '');
+      pageNav.button.disabled = utility; // a utility page is not one of a group's pages; the label only says where you are
+      moreBtn.classList.toggle('active', utility);
       warningsBtn.classList.toggle('active', path === 'quality');
+      document.title = `${current.group ? pageLabel(path) : pageLabel(path)} · Metric Studio`;
     },
     /** The storage banner: hidden when writes are durable and in sync. */
     setStorage(info) {

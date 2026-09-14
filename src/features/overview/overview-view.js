@@ -45,7 +45,7 @@ export function mountOverviewView(container, ctx) {
     const byStatus = {};
     for (const s of METRIC_STATUSES) byStatus[s] = 0;
     for (const m of store.list('metrics')) byStatus[m.status] = (byStatus[m.status] || 0) + 1;
-    return card(t('overview.catalogue'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') } },
+    return card(t('overview.catalogue'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') }, className: 'two' },
       h('div', { class: 'ov-tiles' },
         tile(metrics, t('overview.metrics'), { onClick: () => go('metrics') }),
         tile(store.count('structureNodes'), t('overview.groups'), { onClick: () => go('structure') }),

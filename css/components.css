@@ -120,7 +120,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .list-host { flex: 1; min-height: 0; position: relative; }
 .vlist { position: absolute; inset: 0; overflow: auto; outline: none; }
 .vlist-spacer { position: relative; width: 100%; }
-.vlist-rows { position: absolute; top: 0; left: 0; right: 0; }
+.vlist-rows { position: absolute; top: var(--vlist-head, 0px); left: 0; right: 0; min-width: var(--grid-min, 0px); }
+/* The header scrolls sideways with the rows and stays put vertically: one
+   scroller, one column model, one scroll position. */
+.vlist-header { position: sticky; top: 0; z-index: 3; min-width: var(--grid-min, 0px); box-sizing: border-box; }
+.table-head { height: var(--table-head-h); }
+/* Identity columns stay readable while the rest scrolls past them. */
+.row > .col-code, .table-head > .col-code { position: sticky; left: 0; z-index: 1; background: inherit; padding-left: 14px; margin-left: -14px; }
+.row > .col-name, .table-head > .col-name { position: sticky; left: var(--sticky-name, 106px); z-index: 1; background: inherit; }
+.table-head > .col-code, .table-head > .col-name { background: var(--surface-2); }
+.binding-row.bmatrix-row { --sticky-name: 102px; }
 .row { position: absolute; left: 0; right: 0; display: grid; align-items: center; padding: 0 14px; border-bottom: 1px solid var(--border); cursor: pointer; background: var(--surface); transition: background var(--dur) var(--ease); }
 .row:hover { background: var(--surface-2); }
 .row { font-size: var(--fs-grid); }
@@ -134,9 +143,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .row.dragging { opacity: 0.5; }
 .row.status-draft .name-text { color: var(--text-2); }
 .row.status-deprecated .name-text { color: var(--text-3); text-decoration: line-through; }
-.metric-row { grid-template-columns: 96px minmax(0, 1fr) 72px repeat(2, 108px) 44px 28px; column-gap: 10px; } /* the view overrides the template per scenario count */
-.binding-row { grid-template-columns: 96px minmax(0, 1fr) repeat(2, minmax(0, 1.2fr)) 150px 28px; column-gap: 10px; }
-.issue-row { grid-template-columns: 24px minmax(0, 1.1fr) minmax(0, 2fr) 220px; column-gap: 10px; }
+.metric-row { grid-template-columns: 96px minmax(200px, 1fr) 72px repeat(2, 108px) 44px 28px; column-gap: 10px; } /* the view overrides the template per scenario count */
+.binding-row { grid-template-columns: 96px minmax(200px, 1fr) repeat(2, minmax(220px, 1.2fr)) 120px 28px; column-gap: 10px; }
+.issue-row { grid-template-columns: 24px minmax(200px, 1.1fr) minmax(280px, 2fr) 160px; column-gap: 10px; }
 .col-name { min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.3; }
 .name-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .name-alias { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
