@@ -134,7 +134,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .row.dragging { opacity: 0.5; }
 .row.status-draft .name-text { color: var(--text-2); }
 .row.status-deprecated .name-text { color: var(--text-3); text-decoration: line-through; }
-.metric-row { grid-template-columns: 96px minmax(0, 1fr) 72px repeat(2, 108px) 44px 28px; column-gap: 10px; }
+.metric-row { grid-template-columns: 96px minmax(0, 1fr) 72px repeat(2, 108px) 44px 28px; column-gap: 10px; } /* the view overrides the template per scenario count */
 .binding-row { grid-template-columns: 96px minmax(0, 1fr) repeat(2, minmax(0, 1.2fr)) 150px 28px; column-gap: 10px; }
 .issue-row { grid-template-columns: 24px minmax(0, 1.1fr) minmax(0, 2fr) 220px; column-gap: 10px; }
 .col-name { min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.3; }

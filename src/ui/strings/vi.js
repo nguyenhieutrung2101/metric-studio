@@ -138,6 +138,10 @@ export const vi = {
 
   // metric master view
   'mm.structure': 'Cấu trúc',
+  'mm.contextHint': 'Nhấp một dòng để xem · nhấp đúp hoặc Enter để sửa',
+  'mm.rowHint': 'Nhấp để xem · nhấp đúp để sửa · kéo vào nhóm để xếp',
+  'mm.openStructure': 'Mở không gian Cấu trúc',
+  'mm.openInStructure': 'Mở trong Cấu trúc',
   'mm.addRootNode': 'Thêm nhóm gốc',
   'mm.addSubNode': 'Thêm nhóm con',
   'mm.addSubNodeTitle': 'Thêm nhóm con dưới "{name}"',

@@ -141,6 +141,10 @@ export const en = {
 
   // metric master view
   'mm.structure': 'Structure',
+  'mm.contextHint': 'Click a row to inspect · double-click or Enter to edit',
+  'mm.rowHint': 'Click to inspect · double-click to edit · drag onto a group to place',
+  'mm.openStructure': 'Open the Structure workspace',
+  'mm.openInStructure': 'Open in Structure',
   'mm.addRootNode': 'Add root group',
   'mm.addSubNode': 'Add sub-group',
   'mm.addSubNodeTitle': 'Add sub-group under "{name}"',

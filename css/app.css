@@ -210,3 +210,12 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   .ws-body.has-side.has-insights { grid-template-columns: var(--tree-w) minmax(0, 1fr); }
   .ws-body.has-side.has-insights > .insights, .ws-body.has-insights > .insights { display: none; }
 }
+
+/* Metric Master worksheet specifics */
+.ctx-tree { display: flex; flex-direction: column; min-width: 280px; }
+.ctx-hint { white-space: nowrap; }
+.list-hint { margin-left: auto; white-space: nowrap; }
+.insight-ok { color: var(--success); }
+.insight-sev-error .insight-title::before, .insight-sev-warning .insight-title::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.insight-sev-error .insight-title::before { background: var(--danger); }
+.insight-sev-warning .insight-title::before { background: var(--warning); }

@@ -3,89 +3,87 @@ import { t } from '../../ui/i18n.js';
 import { Tree } from '../../ui/tree/tree.js';
 import { VirtualList } from '../../ui/table/virtual-list.js';
 import { openMenu } from '../../ui/components/menu.js';
-import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
+import { promptDialog } from '../../ui/components/confirm.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
 import { METRIC_STATUSES } from '../../core/models/metric.js';
 import { debounce } from '../../utils/debounce.js';
 import { compareText } from '../../utils/text.js';
 import { getPreference, setPreference } from '../../utils/preferences.js';
 import { worstSeverity } from '../../services/validation-service.js';
+import { pageHeader } from '../../ui/workspace/page-header.js';
+import { contextBar, contextSelect } from '../../ui/workspace/context-bar.js';
+import { workspaceLayout } from '../../ui/workspace/workspace-layout.js';
+import { createInsightsPanel } from '../../ui/workspace/insights-panel.js';
+import { filterBar } from '../../ui/filter/filter-bar.js';
 import { nodeOptions } from './metric-drawer.js';
+import { renderMetricInsights } from './metric-insights.js';
 
 const NODE_MIME = 'application/x-metric-studio-node';
 const METRIC_MIME = 'application/x-metric-studio-metric';
-const ROW_HEIGHT = 40;
 
 /**
- * Metric Master — default workspace.
- * Left: structural hierarchy. Center: virtualised metric table. Right: drawer.
+ * Metric Master — the worksheet.
+ *
+ *   structure navigator │ primary grid │ insights
+ *
+ * The contract: a single click selects a row and the inspector shows it;
+ * double-click, Enter or *Edit* open the editor. Inspecting ten metrics
+ * means ten clicks, not ten drawers. The structure tree on the left is a
+ * context selector here — it scopes the grid — and editing the hierarchy
+ * lives in the Structure workspace; dropping a metric onto a node is the
+ * one edit that stays, because it is about the metric, not the tree.
  */
 export function mountMetricMasterView(container, ctx) {
   const { store, selectors, services } = ctx;
   const state = {
     nodeId: 'all',
     query: '',
-    status: '',
-    coverage: '',
-    role: '',
-    unitId: '',
-    warningsOnly: false,
-    dimensionId: '',
+    filters: {},
     sort: { key: 'code', dir: 1 },
-    advancedOpen: false,
     items: [],
+    selectedId: null,
   };
   const expanded = new Set(getPreference('tree.expanded', []));
 
-  // ---------------------------------------------------------------- layout
+  // ---------------------------------------------------------------- header + context
+  const newBtn = btn(t('mm.newMetric'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => newMetric() } });
+  const countLabel = h('span', { class: 'count-label' });
+  const header = pageHeader({ title: t('nav.metrics'), meta: countLabel, actions: [newBtn] });
+
+  const structureCtx = contextSelect({
+    label: t('mm.structure'),
+    icon: 'folder',
+    value: t('mm.allMetrics'),
+    renderPicker: (close) => structurePicker(close),
+  });
+  const context = contextBar(structureCtx.el, h('span', { class: 'spacer' }), h('span', { class: 'ctx-hint muted small', text: t('mm.contextHint') }));
+
+  // ---------------------------------------------------------------- filters
+  const filters = filterBar({
+    search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; refreshList({ keepScroll: false }); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
+    filters: [
+      { key: 'status', label: t('metric.field.status'), options: METRIC_STATUSES.map((s) => ({ value: s, label: t(`metric.status.${s}`) })) },
+      { key: 'coverage', label: t('mm.filter.coverage'), options: () => coverageOptions(ctx) },
+      { key: 'unitId', label: t('metric.field.unit'), options: () => selectors.units().map((u) => ({ value: u.id, label: u.code })) },
+      { key: 'dimensionId', label: t('mm.filter.dimension'), options: () => selectors.dimensionsSorted().map((d) => ({ value: d.id, label: `${d.code} ${d.name}` })) },
+      { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
+    ],
+    onChange: (values) => { state.filters = values; refreshList({ keepScroll: false }); },
+  });
+  const searchInput = filters.searchInput;
+
+  // ---------------------------------------------------------------- structure navigator (side)
   const treeHost = h('div', { class: 'tree-scroll' });
   const pseudoRows = h('div', { class: 'tree-pseudo' });
-  const treePane = h('aside', { class: 'pane tree-pane' },
+  const side = h('aside', { class: 'pane tree-pane' },
     h('div', { class: 'pane-head' },
       h('span', { class: 'pane-title', text: t('mm.structure') }),
-      h('div', { class: 'pane-actions' },
-        btn('', { icon: 'plus', size: 'sm', title: t('mm.addRootNode'), on: { click: () => addNode(null) } }),
-      ),
+      h('div', { class: 'pane-actions' }, btn('', { icon: 'external', size: 'sm', className: 'btn-ghost', title: t('mm.openStructure'), on: { click: () => ctx.router.navigate('structure', { node: state.nodeId !== 'all' && state.nodeId !== 'unplaced' ? state.nodeId : null }) } })),
     ),
     pseudoRows,
     treeHost,
   );
 
-  const searchInput = h('input', { class: 'input search-input', type: 'search', placeholder: t('mm.searchPlaceholder'), 'aria-label': t('mm.search') });
-  const statusSelect = h('select', { class: 'input input-sm', 'aria-label': t('metric.field.status') }, h('option', { value: '', text: t('mm.filter.anyStatus') }), METRIC_STATUSES.map((s) => h('option', { value: s, text: t(`metric.status.${s}`) })));
-  const coverageSelect = h('select', { class: 'input input-sm', 'aria-label': t('mm.filter.coverage') }, h('option', { value: '', text: t('mm.filter.anyCoverage') }), coverageOptions(ctx).map((o) => h('option', { value: o.value, text: o.label })));
-  const advancedBtn = btn(t('mm.filter.advanced'), { size: 'sm', icon: 'filter', on: { click: () => toggleAdvanced() } });
-  const newBtn = btn(t('mm.newMetric'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => newMetric() } });
-  const toolbar = h('div', { class: 'toolbar' }, h('div', { class: 'search' }, icon('search', { className: 'search-icon' }), searchInput), statusSelect, coverageSelect, advancedBtn, h('span', { class: 'spacer' }), newBtn);
-
-  const unitSelect = h('select', { class: 'input input-sm' });
-  const dimSelect = h('select', { class: 'input input-sm' });
-  const warnCheck = h('input', { type: 'checkbox' });
-  const advanced = h('div', { class: 'toolbar advanced', hidden: true },
-    h('label', { class: 'inline-field' }, h('span', { text: t('metric.field.unit') }), unitSelect),
-    h('label', { class: 'inline-field' }, h('span', { text: t('mm.filter.dimension') }), dimSelect),
-    h('label', { class: 'check-inline' }, warnCheck, h('span', { text: t('mm.filter.warningsOnly') })),
-    btn(t('mm.filter.reset'), { size: 'sm', on: { click: () => resetFilters() } }),
-  );
-
-  const crumbs = h('div', { class: 'crumbs' });
-  const countLabel = h('span', { class: 'count-label' });
-  const listMeta = h('div', { class: 'list-meta' }, crumbs, countLabel);
-  const header = h('div', { class: 'table-head metric-row' },
-    sortHead('code', t('mm.col.code'), 'col-code'),
-    sortHead('name', t('mm.col.name'), 'col-name'),
-    sortHead('unit', t('mm.col.unit'), 'col-unit'),
-    ...selectors.scenarios().map((s) => h('span', { class: 'col-binding', text: s.code, title: s.name })),
-    h('span', { class: 'col-dims', text: t('mm.col.dims'), title: t('mm.col.dimsTitle') }),
-    h('span', { class: 'col-warn', text: '' }),
-  );
-  const empty = h('div', { class: 'empty', hidden: true }, icon('search', { size: 28 }), h('p', { text: t('mm.empty') }), btn(t('mm.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => newMetric() } }));
-  const listHost = h('div', { class: 'list-host' });
-  const listPane = h('section', { class: 'pane list-pane' }, toolbar, advanced, listMeta, header, listHost, empty);
-  const root = h('div', { class: 'mm-layout' }, treePane, listPane);
-  container.appendChild(root);
-
-  // ---------------------------------------------------------------- tree
   const tree = new Tree(treeHost, {
     expanded,
     getRoots: () => selectors.structureTree().roots,
@@ -103,28 +101,22 @@ export function mountMetricMasterView(container, ctx) {
     onContextMenu: (entry, e) => nodeMenu(entry, e.target),
     dnd: {
       mimeType: NODE_MIME,
-      accepts: [NODE_MIME, METRIC_MIME],
-      canDrag: () => true,
-      canDrop: (payload, targetId) => true,
-      onDrop: async (payload, targetId, position) => {
+      accepts: [METRIC_MIME],
+      // The navigator does not reorder the hierarchy; that is the Structure
+      // workspace's job. It does accept a metric dropped onto a group.
+      canDrag: () => false,
+      canDrop: (payload) => payload.type === METRIC_MIME,
+      onDrop: async (payload, targetId) => {
+        if (payload.type !== METRIC_MIME) return;
         try {
-          if (payload.type === METRIC_MIME) {
-            // Dragging from a group moves it out of that group; from "All" / "Not in structure"
-            // a singly-placed metric is moved, a multi-placed one gains a placement.
-            let fromNodeId = payload.fromNodeId && store.has('structureNodes', payload.fromNodeId) ? payload.fromNodeId : null;
-            if (!fromNodeId) {
-              const placements = selectors.placementsByMetric(payload.id).filter((l) => store.has('structureNodes', l.structureNodeId));
-              if (placements.length === 1) fromNodeId = placements[0].structureNodeId;
-            }
-            if (fromNodeId) await services.structure.moveMetric(payload.id, fromNodeId, targetId);
-            else await services.structure.placeMetric(payload.id, targetId);
-            ctx.toast.success(t('mm.metricMoved', { node: store.get('structureNodes', targetId).name }));
-          } else if (payload.id !== targetId) {
-            if (position === 'into') await services.structure.moveNode(payload.id, targetId);
-            else await services.structure.moveNodeRelative(payload.id, targetId, position);
-            const parent = position === 'into' ? targetId : store.get('structureNodes', targetId).parentId;
-            if (parent) expanded.add(parent);
+          let fromNodeId = payload.fromNodeId && store.has('structureNodes', payload.fromNodeId) ? payload.fromNodeId : null;
+          if (!fromNodeId) {
+            const placements = selectors.placementsByMetric(payload.id).filter((l) => store.has('structureNodes', l.structureNodeId));
+            if (placements.length === 1) fromNodeId = placements[0].structureNodeId;
           }
+          if (fromNodeId) await services.structure.moveMetric(payload.id, fromNodeId, targetId);
+          else await services.structure.placeMetric(payload.id, targetId);
+          ctx.toast.success(t('mm.metricMoved', { node: store.get('structureNodes', targetId).name }));
         } catch (err) {
           ctx.toast.error(err.message);
         }
@@ -132,13 +124,19 @@ export function mountMetricMasterView(container, ctx) {
     },
   });
 
+  function nodeMenu(entry, anchor) {
+    const node = entry.node;
+    openMenu(anchor, [
+      { label: t('mm.newMetricHere'), icon: 'plus', onClick: () => newMetric(node.id) },
+      { label: t('mm.openInStructure'), icon: 'external', onClick: () => ctx.router.navigate('structure', { node: node.id }) },
+    ]);
+  }
+
   function renderPseudoRows() {
     clear(pseudoRows);
-    const all = store.count('metrics');
-    const unplaced = selectors.unplacedMetricIds().size;
     pseudoRows.append(
-      pseudoRow('all', t('mm.allMetrics'), all, 'layers'),
-      pseudoRow('unplaced', t('mm.unplaced'), unplaced, 'warning'),
+      pseudoRow('all', t('mm.allMetrics'), store.count('metrics'), 'layers'),
+      pseudoRow('unplaced', t('mm.unplaced'), selectors.unplacedMetricIds().size, 'warning'),
     );
   }
 
@@ -171,6 +169,22 @@ export function mountMetricMasterView(container, ctx) {
     tree.render();
   }
 
+  /** The tree, offered as the picker of the structure context control. */
+  function structurePicker(close) {
+    const host = h('div', { class: 'ctx-tree' });
+    const pick = (id) => { close(); selectNode(id); };
+    host.appendChild(h('button', { type: 'button', class: ['ctx-option', state.nodeId === 'all' && 'active'], on: { click: () => pick('all') } }, h('span', { text: t('mm.allMetrics') })));
+    host.appendChild(h('button', { type: 'button', class: ['ctx-option', state.nodeId === 'unplaced' && 'active'], on: { click: () => pick('unplaced') } }, h('span', { text: t('mm.unplaced') })));
+    const walk = (entry, depth) => {
+      const counts = selectors.nodeCounts(entry.node.id);
+      host.appendChild(h('button', { type: 'button', class: ['ctx-option', state.nodeId === entry.node.id && 'active'], style: { paddingLeft: `${8 + depth * 14}px` }, on: { click: () => pick(entry.node.id) } },
+        h('span', { text: entry.node.name }), h('span', { class: 'ctx-option-sub', text: counts.total ? formatNumber(counts.total) : '' })));
+      for (const c of entry.children) walk(c, depth + 1);
+    };
+    for (const r of selectors.structureTree().roots) walk(r, 0);
+    return host;
+  }
+
   function selectNode(id) {
     state.nodeId = id;
     ctx.router.setParams({ node: id === 'all' ? null : id });
@@ -180,72 +194,29 @@ export function mountMetricMasterView(container, ctx) {
     refreshList({ keepScroll: false });
   }
 
-  async function addNode(parentId) {
-    const parent = parentId ? store.get('structureNodes', parentId) : null;
-    const values = await promptDialog({ title: parent ? t('mm.addSubNodeTitle', { name: parent.name }) : t('mm.addRootNode'), confirmLabel: t('common.create'), fields: [{ name: 'name', label: t('mm.nodeName'), placeholder: t('mm.nodeNamePlaceholder') }, { name: 'code', label: t('mm.nodeCode'), placeholder: 'VH.DV' }] });
-    if (!values || !values.name) return;
-    try {
-      const node = await services.structure.createNode({ parentId, name: values.name, code: values.code });
-      if (parentId) expanded.add(parentId);
-      setPreference('tree.expanded', [...expanded]);
-      renderTree();
-      selectNode(node.id);
-    } catch (err) {
-      ctx.toast.error(err.message);
-    }
-  }
+  // ---------------------------------------------------------------- grid (main)
+  const crumbs = h('div', { class: 'crumbs' });
+  const gridHead = h('div', { class: 'table-head metric-row' },
+    sortHead('code', t('mm.col.code'), 'col-code'),
+    sortHead('name', t('mm.col.name'), 'col-name'),
+    sortHead('unit', t('mm.col.unit'), 'col-unit'),
+    ...selectors.scenarios().map((s) => h('span', { class: 'col-binding', text: s.code, title: s.name })),
+    h('span', { class: 'col-dims', text: t('mm.col.dims'), title: t('mm.col.dimsTitle') }),
+    h('span', { class: 'col-warn', text: '' }),
+  );
+  const empty = h('div', { class: 'empty', hidden: true }, icon('search', { size: 28 }), h('p', { text: t('mm.empty') }), btn(t('mm.newMetric'), { size: 'sm', icon: 'plus', on: { click: () => newMetric() } }));
+  const listHost = h('div', { class: 'list-host' });
+  const main = h('section', { class: 'pane list-pane' }, h('div', { class: 'list-meta' }, crumbs, h('span', { class: 'muted small list-hint', text: t('mm.rowHint') })), gridHead, listHost, empty);
 
-  function nodeMenu(entry, anchor) {
-    const node = entry.node;
-    openMenu(anchor, [
-      { label: t('mm.newMetricHere'), icon: 'plus', onClick: () => newMetric(node.id) },
-      { label: t('mm.addSubNode'), icon: 'folder', onClick: () => addNode(node.id) },
-      { separator: true },
-      { label: t('common.rename'), icon: 'edit', onClick: async () => {
-        const values = await promptDialog({ title: t('mm.renameNode'), fields: [{ name: 'name', label: t('mm.nodeName'), value: node.name }, { name: 'code', label: t('mm.nodeCode'), value: node.code }, { name: 'owner', label: t('metric.field.owner'), value: node.owner }] });
-        if (!values) return;
-        try { await services.structure.updateNode(node.id, values); } catch (err) { ctx.toast.error(err.message); }
-      } },
-      { label: t('mm.moveUp'), icon: 'up', onClick: () => services.structure.reorderNode(node.id, 'up').catch((e) => ctx.toast.error(e.message)) },
-      { label: t('mm.moveDown'), icon: 'down', onClick: () => services.structure.reorderNode(node.id, 'down').catch((e) => ctx.toast.error(e.message)) },
-      { label: t('mm.moveTo'), icon: 'arrowRight', onClick: async () => {
-        const options = [{ value: '', label: t('mm.rootLevel') }, ...nodeOptions(ctx).filter((o) => o.value !== node.id && !services.structure.isDescendant(o.value, node.id))];
-        const values = await promptDialog({ title: t('mm.moveNodeTitle', { name: node.name }), confirmLabel: t('common.move'), fields: [{ name: 'parentId', label: t('mm.newParent'), type: 'select', value: node.parentId || '', options }] });
-        if (!values) return;
-        try { await services.structure.moveNode(node.id, values.parentId || null); if (values.parentId) expanded.add(values.parentId); renderTree(); } catch (err) { ctx.toast.error(err.message); }
-      } },
-      { separator: true },
-      { label: t('common.delete'), icon: 'trash', danger: true, onClick: () => deleteNode(node) },
-    ]);
-  }
-
-  async function deleteNode(node) {
-    const counts = selectors.nodeCounts(node.id);
-    const children = entryChildren(node.id);
-    const hasContent = counts.direct > 0 || children > 0;
-    const choice = await confirmDialog({
-      title: t('mm.deleteNodeTitle', { name: node.name }),
-      message: hasContent ? t('mm.deleteNodeMessage', { metrics: counts.direct, nodes: children }) : t('mm.deleteNodeEmpty'),
-      confirmLabel: t('common.delete'),
-      options: hasContent ? [{ value: 'moveToParent', label: t('mm.deleteMoveToParent') }] : null,
-    });
-    if (!choice) return;
-    try {
-      await services.structure.deleteNode(node.id, { strategy: hasContent ? 'moveToParent' : 'refuse' });
-      if (state.nodeId === node.id) selectNode(node.parentId || 'all');
-      ctx.toast.success(t('mm.nodeDeleted', { name: node.name }));
-    } catch (err) {
-      ctx.toast.error(err.message);
-    }
-  }
-
-  function entryChildren(nodeId) {
-    const entry = selectors.structureTree().byId.get(nodeId);
-    return entry ? entry.children.length : 0;
-  }
-
-  // ---------------------------------------------------------------- list
-  const list = new VirtualList(listHost, { rowHeight: ROW_HEIGHT, keyOf: (m) => m.id, emptyNode: empty, renderRow: renderRow });
+  const list = new VirtualList(listHost, {
+    rowHeight: 'row',
+    keyOf: (m) => m.id,
+    emptyNode: empty,
+    renderRow,
+    onSelect: (m) => select(m ? m.id : null),
+    onActivate: (m) => openMetric(m.id),
+  });
+  gridHead.style.gridTemplateColumns = `96px minmax(0, 1fr) 72px repeat(${selectors.scenarios().length}, 108px) 44px 28px`;
 
   function renderRow(m) {
     const unit = m.unitId ? store.get('units', m.unitId) : null;
@@ -254,8 +225,6 @@ export function mountMetricMasterView(container, ctx) {
     const sev = worstSeverity(issues);
     const dims = selectors.metricDimensions(m.id).length;
     const row = h('div', { class: ['metric-row', 'row', m.status !== 'approved' && `status-${m.status}`, ctx.currentMetricId === m.id && 'active'], role: 'row', tabindex: '-1', draggable: true, dataset: { id: m.id }, on: {
-      click: () => openMetric(m.id),
-      keydown: (e) => { if (e.key === 'Enter') openMetric(m.id); },
       dragstart: (e) => {
         e.dataTransfer.effectAllowed = 'move';
         e.dataTransfer.setData(METRIC_MIME, JSON.stringify({ id: m.id, fromNodeId: state.nodeId !== 'all' && state.nodeId !== 'unplaced' ? state.nodeId : null }));
@@ -270,6 +239,7 @@ export function mountMetricMasterView(container, ctx) {
       h('span', { class: 'col-dims muted', text: dims ? String(dims) : '' }),
       h('span', { class: 'col-warn' }, sev ? severityDot(sev, issues.length) : null),
     );
+    row.style.gridTemplateColumns = gridHead.style.gridTemplateColumns;
     return row;
   }
 
@@ -280,9 +250,8 @@ export function mountMetricMasterView(container, ctx) {
   }
 
   function updateSortMarks() {
-    for (const th of header.querySelectorAll('.th')) {
-      const mark = th.querySelector('.sort-mark');
-      mark.textContent = th.dataset.key === state.sort.key ? (state.sort.dir > 0 ? '▲' : '▼') : '';
+    for (const th of gridHead.querySelectorAll('.th')) {
+      th.querySelector('.sort-mark').textContent = th.dataset.key === state.sort.key ? (state.sort.dir > 0 ? '▲' : '▼') : '';
     }
   }
 
@@ -296,15 +265,16 @@ export function mountMetricMasterView(container, ctx) {
   function computeItems() {
     const scope = scopeIds();
     const hits = selectors.searchMetrics(state.query);
-    let items = [];
+    const f = state.filters;
+    const items = [];
     const source = scope ? [...scope].map((id) => store.get('metrics', id)).filter(Boolean) : store.list('metrics');
     for (const m of source) {
       if (hits && !hits.has(m.id)) continue;
-      if (state.status && m.status !== state.status) continue;
-      if (state.unitId && m.unitId !== state.unitId) continue;
-      if (state.coverage && selectors.coverageClass(m.id) !== state.coverage) continue;
-      if (state.dimensionId && !selectors.metricDimensions(m.id).some((l) => l.dimensionId === state.dimensionId)) continue;
-      if (state.warningsOnly && ctx.validation.issuesForMetric(m.id).length === 0) continue;
+      if (f.status && m.status !== f.status) continue;
+      if (f.unitId && m.unitId !== f.unitId) continue;
+      if (f.coverage && selectors.coverageClass(m.id) !== f.coverage) continue;
+      if (f.dimensionId && !selectors.metricDimensions(m.id).some((l) => l.dimensionId === f.dimensionId)) continue;
+      if (f.warningsOnly && ctx.validation.issuesForMetric(m.id).length === 0) continue;
       items.push(m);
     }
     const { key, dir } = state.sort;
@@ -323,61 +293,51 @@ export function mountMetricMasterView(container, ctx) {
     state.items = computeItems();
     list.setItems(state.items, { keepScroll });
     renderMeta();
+    if (state.selectedId && !state.items.some((m) => m.id === state.selectedId)) select(null);
   }
 
   function renderMeta() {
     clear(crumbs);
-    if (state.nodeId === 'all') crumbs.appendChild(h('span', { class: 'crumb last', text: t('mm.allMetrics') }));
-    else if (state.nodeId === 'unplaced') crumbs.appendChild(h('span', { class: 'crumb last', text: t('mm.unplaced') }));
+    if (state.nodeId === 'all') { crumbs.appendChild(h('span', { class: 'crumb last', text: t('mm.allMetrics') })); structureCtx.setValue('all', t('mm.allMetrics')); }
+    else if (state.nodeId === 'unplaced') { crumbs.appendChild(h('span', { class: 'crumb last', text: t('mm.unplaced') })); structureCtx.setValue('unplaced', t('mm.unplaced')); }
     else {
       const path = selectors.nodePath(state.nodeId);
       path.forEach((n, i) => {
         crumbs.appendChild(h('span', { class: ['crumb', i === path.length - 1 && 'last'], text: n.name, on: { click: () => selectNode(n.id) } }));
         if (i < path.length - 1) crumbs.appendChild(h('span', { class: 'crumb-sep', text: '›' }));
       });
+      structureCtx.setValue(state.nodeId, path.map((n) => n.name).join(' › '));
     }
     const total = state.nodeId === 'all' ? store.count('metrics') : scopeIds().size;
     countLabel.textContent = state.items.length === total ? t('mm.count', { n: formatNumber(total) }) : t('mm.countFiltered', { n: formatNumber(state.items.length), total: formatNumber(total) });
   }
 
-  function refreshRows() {
-    list.refresh();
+  // ---------------------------------------------------------------- insights
+  const insights = createInsightsPanel({ preferenceKey: 'metricMaster', title: t('insights.title'), emptyText: t('insights.empty') });
+
+  function select(id) {
+    state.selectedId = id && store.has('metrics', id) ? id : null;
+    list.setSelected(state.selectedId);
+    ctx.router.setParams({ selected: state.selectedId });
+    renderInsights();
   }
 
-  // ---------------------------------------------------------------- filters
-  const onSearch = debounce(() => { state.query = searchInput.value; refreshList({ keepScroll: false }); }, 160);
-  searchInput.addEventListener('input', onSearch);
-  searchInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') { searchInput.value = ''; state.query = ''; refreshList(); searchInput.blur(); }
-    if (e.key === 'Enter' && state.items.length) openMetric(state.items[0].id);
-  });
-  statusSelect.addEventListener('change', () => { state.status = statusSelect.value; refreshList({ keepScroll: false }); });
-  coverageSelect.addEventListener('change', () => { state.coverage = coverageSelect.value; refreshList({ keepScroll: false }); });
-  unitSelect.addEventListener('change', () => { state.unitId = unitSelect.value; refreshList({ keepScroll: false }); });
-  dimSelect.addEventListener('change', () => { state.dimensionId = dimSelect.value; refreshList({ keepScroll: false }); });
-  warnCheck.addEventListener('change', () => { state.warningsOnly = warnCheck.checked; refreshList({ keepScroll: false }); });
-
-  function toggleAdvanced() {
-    state.advancedOpen = !state.advancedOpen;
-    advanced.hidden = !state.advancedOpen;
-    advancedBtn.classList.toggle('active', state.advancedOpen);
+  function renderInsights() {
+    if (!state.selectedId) {
+      insights.setContent(null);
+      return;
+    }
+    insights.setContent(renderMetricInsights(ctx, state.selectedId, {
+      onEdit: () => openMetric(state.selectedId),
+      onDependencies: () => ctx.router.navigate('dependencies', { metric: state.selectedId }),
+      onStructure: (nodeId) => selectNode(nodeId),
+    }));
   }
 
-  function resetFilters() {
-    Object.assign(state, { query: '', status: '', coverage: '', role: '', unitId: '', warningsOnly: false, dimensionId: '' });
-    searchInput.value = '';
-    statusSelect.value = '';
-    coverageSelect.value = '';
-    unitSelect.value = '';
-    dimSelect.value = '';
-    warnCheck.checked = false;
-    refreshList({ keepScroll: false });
-  }
-
-  function fillAdvancedOptions() {
-    unitSelect.replaceChildren(h('option', { value: '', text: t('mm.filter.anyUnit') }), ...selectors.units().map((u) => h('option', { value: u.id, text: u.code, selected: u.id === state.unitId })));
-    dimSelect.replaceChildren(h('option', { value: '', text: t('mm.filter.anyDimension') }), ...selectors.dimensionsSorted().map((d) => h('option', { value: d.id, text: `${d.code} ${d.name}`, selected: d.id === state.dimensionId })));
-  }
+  // ---------------------------------------------------------------- layout
+  const layout = workspaceLayout({ header: header.el, context: context.el, side, main, insights: insights.el, className: 'mm-ws' });
+  layout.el.insertBefore(filters.el, layout.body);
+  container.appendChild(layout.el);
 
   // ---------------------------------------------------------------- actions
   function openMetric(id) {
@@ -400,6 +360,8 @@ export function mountMetricMasterView(container, ctx) {
       const m = await services.metrics.create({ name: values.name }, { structureNodeId: values.structureNodeId || null });
       ctx.toast.success(t('mm.metricCreated', { code: m.code }));
       if (values.structureNodeId && state.nodeId !== 'all' && !selectors.metricIdsUnderNode(state.nodeId).has(m.id)) selectNode(values.structureNodeId);
+      refreshList();
+      select(m.id);
       openMetric(m.id);
     } catch (err) {
       ctx.toast.error(err.message);
@@ -408,22 +370,17 @@ export function mountMetricMasterView(container, ctx) {
 
   // ---------------------------------------------------------------- sync
   const scheduleTree = debounce(() => renderTree(), 30);
-  const scheduleList = debounce(() => refreshList(), 30);
+  const scheduleList = debounce(() => { refreshList(); renderInsights(); }, 30);
   const offStore = store.events.on('change', (evt) => {
     const c = evt.collection;
-    if (c === '*') {
-      fillAdvancedOptions();
-      scheduleTree();
-      scheduleList();
-      return;
-    }
+    if (c === '*') { scheduleTree(); scheduleList(); return; }
     if (c === 'structureNodes' || c === 'metricStructures' || c === 'metrics') scheduleTree();
-    if (c === 'metrics' || c === 'metricStructures' || c === 'bindings' || c === 'metricDimensions' || c === 'units' || c === 'structureNodes') scheduleList();
-    if (c === 'units' || c === 'dimensions') fillAdvancedOptions();
+    if (['metrics', 'metricStructures', 'bindings', 'metricDimensions', 'units', 'structureNodes', 'dimensions'].includes(c)) scheduleList();
   });
   const offValidation = ctx.validation.onChange(() => {
-    if (state.warningsOnly) refreshList();
-    else refreshRows();
+    if (state.filters.warningsOnly) refreshList();
+    else list.refresh();
+    renderInsights();
   });
   const offKeys = keyHandler((e) => {
     if (e.key === '/' && !isTyping()) {
@@ -433,7 +390,6 @@ export function mountMetricMasterView(container, ctx) {
     }
   });
 
-  fillAdvancedOptions();
   updateSortMarks();
   renderTree();
   let initialised = false;
@@ -453,27 +409,30 @@ export function mountMetricMasterView(container, ctx) {
         tree.reveal(nodeId);
         refreshList({ keepScroll: false });
       }
+      const selected = route.params.selected;
+      if (selected && store.has('metrics', selected) && selected !== state.selectedId) select(selected);
       const metricId = route.params.metric;
       if (metricId && store.has('metrics', metricId) && metricId !== ctx.currentMetricId) ctx.openMetric(metricId);
     },
     onShow() {
-      // Hidden views have no height; the virtual list needs to measure again.
       list.refresh();
     },
     onDrawerClosed() {
       ctx.router.setParams({ metric: null });
-      refreshRows();
+      list.refresh();
     },
-    onMetricOpened() {
-      refreshRows();
+    onMetricOpened(id) {
+      // Editing a metric also makes it the selection, so the inspector and
+      // the editor never disagree about which record is in front of the user.
+      if (id && id !== state.selectedId) select(id);
+      list.refresh();
     },
     destroy() {
       offStore();
       offValidation();
       offKeys();
-      onSearch.cancel();
       list.destroy();
-      root.remove();
+      layout.el.remove();
     },
   };
 }
