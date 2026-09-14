@@ -241,7 +241,21 @@ function validateDimensions(store, selectors, add) {
 
 function validateDependencies(store, selectors, dependencies, add) {
   if (!dependencies) return;
-  for (const cycle of dependencies.findCycles()) {
+  // A formula the graph could not process is a finding on that binding, and
+  // the rest of the run carries on.
+  for (const e of (dependencies.graphErrors ? dependencies.graphErrors() : [])) {
+    const metric = store.get('metrics', e.metricId);
+    const scenario = store.get('scenarios', e.scenarioId);
+    add(Severity.ERROR, 'BINDING_FORMULA_UNPROCESSABLE', { type: 'binding', id: e.bindingId }, `${metric ? metric.name : e.metricId} · ${scenario ? scenario.code : '?'}: formula could not be processed — ${e.message}`, { metricId: e.metricId, scenarioId: e.scenarioId, params: { metric: metric ? metric.name : e.metricId, scenario: scenario ? scenario.code : '?', detail: e.message } });
+  }
+  let cycles;
+  try {
+    cycles = dependencies.findCycles();
+  } catch (err) {
+    add(Severity.ERROR, 'DEPENDENCY_GRAPH_FAILED', { type: 'metric', id: '*' }, `Dependency analysis failed: ${err && err.message ? err.message : err}`, { params: { detail: err && err.message ? err.message : String(err) } });
+    return;
+  }
+  for (const cycle of cycles) {
     const first = cycle[0];
     const info = dependencies.nodeInfo(first);
     const names = cycle.map((k) => {

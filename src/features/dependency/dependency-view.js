@@ -155,7 +155,7 @@ export function mountDependencyView(container, ctx) {
 
   function refreshTable() {
     const q = tableState.query.trim().toLowerCase();
-    let rows = dep.edgeRows();
+    let rows = dep.referenceRows();
     if (tableState.scenarioId) rows = rows.filter((r) => r.targetScenarioId === tableState.scenarioId);
     if (q) rows = rows.filter((r) => [r.targetCode, r.targetName, r.targetAliases, r.sourceCode, r.sourceName, r.sourceAliases, r.token, r.formulaText].some((v) => String(v || '').toLowerCase().includes(q)));
     table.setItems(rows);

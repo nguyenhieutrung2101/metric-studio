@@ -87,8 +87,15 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 
 /* ---------- drawer host ---------- */
 /* The drawer overlays the view only, never the top bar or the section tabs. */
-.drawer-host { position: absolute; top: var(--topbar-h); right: 0; bottom: 0; left: 0; pointer-events: none; z-index: 20; }
-.app.has-subnav .drawer-host { top: calc(var(--topbar-h) + var(--subnav-h)); }
+.drawer-host { position: absolute; inset: 0; pointer-events: none; z-index: 20; }
+/* Storage state, on every page: memory-only (warn), lost or out of step (danger). */
+.storage-banner { flex: none; display: flex; align-items: center; gap: 10px; min-height: 34px; padding: 4px 14px; font-size: var(--fs-sm); border-bottom: 1px solid var(--border); }
+.storage-banner[hidden] { display: none; }
+.storage-banner.warn { background: var(--warning-soft); color: var(--text); }
+.storage-banner.warn .icon { color: var(--warning); }
+.storage-banner.danger { background: var(--danger-soft); color: var(--text); }
+.storage-banner.danger .icon { color: var(--danger); }
+.storage-banner-text { flex: 1; min-width: 0; }
 .toast-host { position: fixed; left: 0; right: 0; bottom: 0; pointer-events: none; z-index: 40; }
 
 .fatal { padding: 24px; }

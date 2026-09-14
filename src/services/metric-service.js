@@ -69,6 +69,21 @@ export class MetricService {
     if (ids.some((id) => id !== exceptId)) throw new ValidationFailure(`Metric code "${code}" is already used`, 'code');
   }
 
+  /**
+   * The same question asked where the data lives. This tab's store cannot
+   * see the metric another tab created with the same manual code a moment
+   * ago; the guard reads the stored collection inside the write transaction
+   * and refuses the second one. Legacy duplicates already on disk are a
+   * validation finding, not a reason to refuse an unrelated edit — the guard
+   * only travels with a write that sets a new code.
+   */
+  _codeGuard(code, exceptId) {
+    const key = referenceKey(code);
+    return (stored) => {
+      for (const m of stored) if (m.id !== exceptId && referenceKey(m.code) === key) throw new ValidationFailure(`Metric code "${code}" is already used`, 'code');
+    };
+  }
+
   /** The metric and its first placement are created together or not at all. */
   async create(input, { structureNodeId = null, isPrimary = true } = {}) {
     const name = String(input.name || '').trim();
@@ -80,9 +95,9 @@ export class MetricService {
       || await this.repo.allocateCode('metrics', { prefix: this.codePrefix, width: 6, pattern: this._codePattern });
     this._assertCodeUnique(code);
     const metric = createMetric({ ...input, name, code, version: 0 });
-    const work = new UnitOfWork().save('metrics', metric, null);
+    const work = new UnitOfWork().save('metrics', metric, null).guard('metrics', this._codeGuard(code, metric.id));
     if (structureNodeId && this.store.has('structureNodes', structureNodeId)) {
-      work.save('metricStructures', createMetricStructure({ metricId: metric.id, structureNodeId, isPrimary }), null);
+      work.save('metricStructures', createMetricStructure({ metricId: metric.id, structureNodeId, isPrimary }), null).require('structureNodes', structureNodeId);
     }
     const result = await commit(this.repo, this.store, work);
     return result.saved.find((s) => s.collection === 'metrics').record;
@@ -94,10 +109,15 @@ export class MetricService {
     const merged = createMetric({ ...existing, ...patch, id: existing.id, createdAt: existing.createdAt, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
     if (!merged.code) merged.code = existing.code || this.nextCode();
-    this._assertCodeUnique(merged.code, id);
-    const saved = await this.repo.saveMetric(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
-    this.store.upsert('metrics', saved);
-    return saved;
+    // Uniqueness is asked only of a write that sets a new code. A legacy
+    // duplicate already on disk is a validation finding; refusing to let its
+    // name be edited would leave the person no way to fix it.
+    const codeChanged = referenceKey(merged.code) !== referenceKey(existing.code);
+    if (codeChanged) this._assertCodeUnique(merged.code, id);
+    const work = new UnitOfWork().save('metrics', merged, expectedToken == null ? tokenOf(existing) : expectedToken);
+    if (codeChanged) work.guard('metrics', this._codeGuard(merged.code, id));
+    const result = await commit(this.repo, this.store, work);
+    return result.saved.find((x) => x.collection === 'metrics').record;
   }
 
   /**

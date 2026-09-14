@@ -144,35 +144,39 @@ export function mountStructureView(container, ctx) {
 
   async function addNode(parentId) {
     const parent = parentId ? store.get('structureNodes', parentId) : null;
-    const values = await promptDialog({ title: parent ? t('mm.addSubNodeTitle', { name: parent.name }) : t('mm.addRootNode'), confirmLabel: t('common.create'), fields: [{ name: 'name', label: t('mm.nodeName'), placeholder: t('mm.nodeNamePlaceholder') }, { name: 'code', label: t('mm.nodeCode'), placeholder: 'VH.DV' }, { name: 'owner', label: t('metric.field.owner') }] });
-    if (!values || !values.name) return;
-    try {
-      const node = await services.structure.createNode({ parentId, name: values.name, code: values.code, owner: values.owner });
-      if (parentId) expanded.add(parentId);
-      setPreference('structure.expanded', [...expanded]);
-      hierarchy.render();
-      select(node.id);
-    } catch (err) {
-      ctx.toast.error(err.message);
-    }
+    const node = await promptDialog({
+      title: parent ? t('mm.addSubNodeTitle', { name: parent.name }) : t('mm.addRootNode'),
+      confirmLabel: t('common.create'),
+      fields: [{ name: 'name', label: t('mm.nodeName'), placeholder: t('mm.nodeNamePlaceholder'), required: true }, { name: 'code', label: t('mm.nodeCode'), placeholder: 'VH.DV' }, { name: 'owner', label: t('metric.field.owner') }],
+      submit: (values) => services.structure.createNode({ parentId, name: values.name, code: values.code, owner: values.owner }),
+    });
+    if (!node) return;
+    if (parentId) expanded.add(parentId);
+    setPreference('structure.expanded', [...expanded]);
+    hierarchy.render();
+    select(node.id);
   }
 
   async function renameNode(node) {
-    const values = await promptDialog({ title: t('mm.renameNode'), fields: [{ name: 'name', label: t('mm.nodeName'), value: node.name }, { name: 'code', label: t('mm.nodeCode'), value: node.code }, { name: 'owner', label: t('metric.field.owner'), value: node.owner }, { name: 'description', label: t('metric.field.definition'), value: node.description || '' }] });
-    if (!values) return;
-    try { await services.structure.updateNode(node.id, values); } catch (err) { ctx.toast.error(err.message); }
+    await promptDialog({
+      title: t('mm.renameNode'),
+      fields: [{ name: 'name', label: t('mm.nodeName'), value: node.name, required: true }, { name: 'code', label: t('mm.nodeCode'), value: node.code }, { name: 'owner', label: t('metric.field.owner'), value: node.owner }, { name: 'description', label: t('metric.field.definition'), value: node.description || '' }],
+      submit: (values) => services.structure.updateNode(node.id, values),
+    });
   }
 
   async function moveNodeDialog(node) {
     const options = [{ value: '', label: t('mm.rootLevel') }, ...nodeOptions(ctx).filter((o) => o.value !== node.id && !services.structure.isDescendant(o.value, node.id))];
-    const values = await promptDialog({ title: t('mm.moveNodeTitle', { name: node.name }), confirmLabel: t('common.move'), fields: [{ name: 'parentId', label: t('mm.newParent'), type: 'select', value: node.parentId || '', options }] });
-    if (!values) return;
-    try {
-      await services.structure.moveNode(node.id, values.parentId || null);
-      if (values.parentId) expanded.add(values.parentId);
-      setPreference('structure.expanded', [...expanded]);
-      hierarchy.render();
-    } catch (err) { ctx.toast.error(err.message); }
+    const moved = await promptDialog({
+      title: t('mm.moveNodeTitle', { name: node.name }),
+      confirmLabel: t('common.move'),
+      fields: [{ name: 'parentId', label: t('mm.newParent'), type: 'select', value: node.parentId || '', options }],
+      submit: async (values) => { await services.structure.moveNode(node.id, values.parentId || null); return { parentId: values.parentId }; },
+    });
+    if (!moved) return;
+    if (moved.parentId) expanded.add(moved.parentId);
+    setPreference('structure.expanded', [...expanded]);
+    hierarchy.render();
   }
 
   async function deleteNode(node) {

@@ -47,7 +47,21 @@ export class MemoryRepository extends Repository {
   }
 
   describe() {
-    return { persistent: false, kind: 'memory', atomicBatch: true, restorePoints: true };
+    return { persistent: false, kind: 'memory', atomicBatch: true, restorePoints: true, writable: true };
+  }
+
+  onStatusChange(fn) {
+    if (!this._statusListeners) this._statusListeners = new Set();
+    this._statusListeners.add(fn);
+    return () => this._statusListeners.delete(fn);
+  }
+
+  _emitStatus() {
+    if (!this._statusListeners) return;
+    const info = this.describe();
+    for (const fn of [...this._statusListeners]) {
+      try { fn(info); } catch (err) { console.error(err); } // eslint-disable-line no-console
+    }
   }
 
   async loadAll() {

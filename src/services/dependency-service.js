@@ -1,6 +1,6 @@
 import { nodeKey, splitNodeKey, BindingType } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
-import { parseFormula, referenceIdentity } from './formula-parser.js';
+import { parseFormula, referenceIdentity, astReferenceOccurrences, FORMULA_LIMITS } from './formula-parser.js';
 
 const UNKNOWN_SCENARIO = 'unknown-scenario:';
 
@@ -75,6 +75,11 @@ export class DependencyService {
       map.get(key).push(edge);
     };
 
+    // A binding whose formula cannot be processed (beyond the complexity
+    // budget, or a cache in a shape the parser refuses) is skipped and
+    // reported, never allowed to take the whole graph — and with it the
+    // validation run and the app start — down.
+    const errors = [];
     for (const b of store.list('bindings')) {
       if (b.type !== BindingType.FORMULA) continue;
       if (!store.has('metrics', b.metricId) || !store.has('scenarios', b.scenarioId)) continue;
@@ -83,30 +88,17 @@ export class DependencyService {
       // Where each reference sits in the formula: its order of appearance and
       // the operator or function it is an operand of. The edge table hands
       // these to whoever builds execution order or lineage outside the app.
-      const placement = referencePlacement(b.formulaText);
+      let placement;
+      try {
+        placement = referencePlacement(b.formulaText);
+      } catch (err) {
+        errors.push({ bindingId: b.id, metricId: b.metricId, scenarioId: b.scenarioId, message: err && err.message ? err.message : String(err) });
+        continue;
+      }
       let seq = 0;
       for (const ref of b.parsedReferences || []) {
         seq += 1;
-        let targetScenarioId = b.scenarioId;
-        let scenarioResolved = true;
-        if (ref.scenarioCode) {
-          const s = selectors.scenarioByCode(ref.scenarioCode);
-          if (s) {
-            targetScenarioId = s.id;
-          } else {
-            scenarioResolved = false;
-            targetScenarioId = unknownScenarioId(ref.scenarioCode);
-          }
-        } else if (ref.scenarioId && store.has('scenarios', ref.scenarioId)) {
-          targetScenarioId = ref.scenarioId;
-        }
-
-        // Prefer the id cached at save time; fall back to re-resolving the token.
-        let targetMetricId = ref.metricId && store.has('metrics', ref.metricId) ? ref.metricId : null;
-        if (!targetMetricId) {
-          const r = selectors.resolveReference(ref.token);
-          if (r.status === 'resolved') targetMetricId = r.metricId;
-        }
+        const { targetScenarioId, scenarioResolved, targetMetricId } = this._resolveTarget(b, ref);
 
         const to = targetMetricId ? nodeKey(targetMetricId, targetScenarioId) : `missing:${referenceKey(ref.token)}|${targetScenarioId}`;
         // The graph is a dependency between metrics, so two slices of the same
@@ -144,11 +136,110 @@ export class DependencyService {
       }
     }
 
-    return { edges, outgoing, incoming, cycles: null };
+    return { edges, outgoing, incoming, cycles: null, errors };
+  }
+
+  /** Where a reference points: the scenario (or an unknown-scenario marker) and the metric, if any. */
+  _resolveTarget(b, ref) {
+    const { store, selectors } = this;
+    let targetScenarioId = b.scenarioId;
+    let scenarioResolved = true;
+    if (ref.scenarioCode) {
+      const s = selectors.scenarioByCode(ref.scenarioCode);
+      if (s) {
+        targetScenarioId = s.id;
+      } else {
+        scenarioResolved = false;
+        targetScenarioId = unknownScenarioId(ref.scenarioCode);
+      }
+    } else if (ref.scenarioId && store.has('scenarios', ref.scenarioId)) {
+      targetScenarioId = ref.scenarioId;
+    }
+    // Prefer the id cached at save time; fall back to re-resolving the token.
+    let targetMetricId = ref.metricId && store.has('metrics', ref.metricId) ? ref.metricId : null;
+    if (!targetMetricId) {
+      const r = selectors.resolveReference(ref.token);
+      if (r.status === 'resolved') targetMetricId = r.metricId;
+    }
+    return { targetScenarioId, scenarioResolved, targetMetricId };
   }
 
   edges() {
     return this._index().edges;
+  }
+
+  /** Bindings the graph could not process: [{ bindingId, metricId, scenarioId, message }]. */
+  graphErrors() {
+    return this._index().errors || [];
+  }
+
+  /**
+   * One row per reference OCCURRENCE inside a formula — the table a pipeline
+   * builds execution order or lineage from. Unlike `edgeRows()`, which is
+   * one row per (metric, metric) dependency, this keeps every appearance:
+   * `[REVENUE | Product=A] - [REVENUE | Product=B]` is two rows, each with
+   * its own sequence, operator, dimension context and AST path. The formula
+   * text travels on every row, so a consumer can always check the flattening
+   * against the source. `edgeId` links each occurrence to its graph edge.
+   *
+   * The AST path is the chain of operators from the root, one step per
+   * level (`+:left/*:right/SUM:arg2`): enough to rebuild where an operand
+   * sits, not a substitute for reading the formula when executable semantics
+   * are needed.
+   */
+  referenceRows() {
+    const { store } = this;
+    const scenarioCode = (id) => (store.get('scenarios', id) || {}).code || (isUnknownScenarioId(id) ? unknownScenarioCode(id) : '?');
+    const rows = [];
+    for (const b of store.list('bindings')) {
+      if (b.type !== BindingType.FORMULA) continue;
+      if (!store.has('metrics', b.metricId) || !store.has('scenarios', b.scenarioId)) continue;
+      const target = store.get('metrics', b.metricId);
+      const from = nodeKey(b.metricId, b.scenarioId);
+      let occurrences;
+      try {
+        occurrences = formulaOccurrences(b.formulaText, b.parsedReferences || []);
+      } catch {
+        continue; // reported by graphErrors()
+      }
+      let seq = 0;
+      for (const occ of occurrences) {
+        seq += 1;
+        const ref = occ.ref;
+        const { targetScenarioId, scenarioResolved, targetMetricId } = this._resolveTarget(b, ref);
+        const to = targetMetricId ? nodeKey(targetMetricId, targetScenarioId) : `missing:${referenceKey(ref.token)}|${targetScenarioId}`;
+        const source = targetMetricId ? store.get('metrics', targetMetricId) : null;
+        rows.push({
+          id: `${b.id}#${seq}`,
+          edgeId: `${from}->${to}`,
+          bindingId: b.id,
+          targetMetricId: b.metricId,
+          targetCode: target.code,
+          targetName: target.name,
+          targetAliases: (target.aliases || []).join(' '),
+          targetScenarioId: b.scenarioId,
+          targetScenario: scenarioCode(b.scenarioId),
+          bindingType: BindingType.FORMULA,
+          sourceMetricId: targetMetricId,
+          sourceCode: source ? source.code : ref.token,
+          sourceName: source ? source.name : '',
+          sourceAliases: source ? (source.aliases || []).join(' ') : '',
+          sourceScenarioId: targetScenarioId,
+          sourceScenario: scenarioCode(targetScenarioId),
+          sequence: seq,
+          referenceType: targetScenarioId !== b.scenarioId ? 'cross-scenario' : 'same-scenario',
+          dimensionContext: ref.dimensionContext ? ref.dimensionContext.map((p) => (p.member == null ? p.dimension : `${p.dimension}=${p.member}`)).join('; ') : '',
+          operator: occ.operator || '',
+          astPath: occ.path || '',
+          resolved: !!targetMetricId && scenarioResolved,
+          token: ref.token,
+          raw: ref.raw || `[${ref.token}]`,
+          formulaText: b.formulaText,
+        });
+      }
+    }
+    rows.sort((a, b) => a.targetScenario.localeCompare(b.targetScenario) || a.targetCode.localeCompare(b.targetCode) || a.sequence - b.sequence);
+    return rows;
   }
 
   /**
@@ -499,36 +590,43 @@ export class DependencyService {
 /**
  * For every reference in a formula, the operator or function it is a direct
  * operand of (`*`, `+`, `SUM`…), keyed by reference identity. First
- * occurrence wins; groups are transparent.
+ * occurrence wins; groups are transparent. Iterative: see
+ * astReferenceOccurrences.
  */
 function referencePlacement(formulaText) {
   const out = new Map();
-  const { ast } = parseFormula(formulaText || '');
-  const walk = (node, parentOp) => {
-    if (!node) return;
-    switch (node.type) {
-      case 'reference': {
-        const key = referenceIdentity(node);
-        if (!out.has(key)) out.set(key, { operator: parentOp });
-        break;
-      }
-      case 'binary':
-        walk(node.left, node.op);
-        walk(node.right, node.op);
-        break;
-      case 'unary':
-        walk(node.operand, node.op);
-        break;
-      case 'group':
-        walk(node.expression, parentOp);
-        break;
-      case 'call':
-        for (const a of node.args) walk(a, node.name);
-        break;
-      default:
-        break;
-    }
-  };
-  walk(ast, '');
+  const text = formulaText || '';
+  if (text.length > FORMULA_LIMITS.maxLength) throw new Error(`Formula is too long (${text.length} characters; the limit is ${FORMULA_LIMITS.maxLength})`);
+  const { ast } = parseFormula(text);
+  for (const occ of astReferenceOccurrences(ast)) {
+    const key = referenceIdentity(occ.node);
+    if (!out.has(key)) out.set(key, { operator: occ.operator });
+  }
+  return out;
+}
+
+/**
+ * Every reference occurrence of a formula in source order, each paired with
+ * the persisted reference (resolution cache) it corresponds to. When the
+ * formula does not parse, the cache's own order is used and placement is
+ * unknown — the row still exists, so the table never silently drops a
+ * dependency the graph knows about.
+ */
+function formulaOccurrences(formulaText, parsedReferences) {
+  const text = formulaText || '';
+  if (text.length > FORMULA_LIMITS.maxLength) throw new Error('Formula is too long');
+  const cache = new Map();
+  for (const r of parsedReferences) {
+    const key = referenceIdentity(r);
+    if (!cache.has(key)) cache.set(key, r);
+  }
+  const { ast } = parseFormula(text);
+  if (!ast) return parsedReferences.map((ref) => ({ ref, operator: '', path: '' }));
+  const out = [];
+  for (const occ of astReferenceOccurrences(ast)) {
+    const key = referenceIdentity(occ.node);
+    const ref = cache.get(key) || { raw: occ.node.raw, token: occ.node.token, scenarioCode: occ.node.scenarioCode, dimensionContext: occ.node.dimensionContext, metricId: null, scenarioId: null, status: 'missing' };
+    out.push({ ref, operator: occ.operator, path: occ.path });
+  }
   return out;
 }

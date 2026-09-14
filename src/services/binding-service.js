@@ -1,6 +1,6 @@
 import { createBinding, BindingType } from '../core/models/binding.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
-import { parseFormula, distinctReferences } from './formula-parser.js';
+import { parseFormula, distinctReferences, FORMULA_LIMITS } from './formula-parser.js';
 import { ValidationFailure } from './metric-service.js';
 import { UnitOfWork, commit } from './unit-of-work.js';
 
@@ -68,7 +68,12 @@ export class BindingService {
     const binding = createBinding({ ...(existing || {}), ...input, id: existing ? existing.id : input.id, metricId, scenarioId, createdAt: existing ? existing.createdAt : undefined, version: existing ? existing.version : 0 });
     let resolution = null;
     if (binding.type === BindingType.FORMULA) {
+      // Refused at the door rather than stored and choked on later. An
+      // imported formula beyond the budget still loads (the graph skips it
+      // and Quality reports it); one typed here is told immediately.
+      if (binding.formulaText.length > FORMULA_LIMITS.maxLength) throw new ValidationFailure(`Formula is too long (${binding.formulaText.length} characters; the limit is ${FORMULA_LIMITS.maxLength})`, 'formulaText');
       resolution = resolveFormula(binding.formulaText, scenarioId, this.selectors, this.store);
+      if (resolution.references.length > FORMULA_LIMITS.maxReferences) throw new ValidationFailure(`Formula references too many metrics (${resolution.references.length}; the limit is ${FORMULA_LIMITS.maxReferences})`, 'formulaText');
       binding.parsedReferences = persistableReferences(resolution.references);
       binding.formulaErrors = resolution.errors.map((e) => ({ message: e.message, position: e.position }));
     } else {

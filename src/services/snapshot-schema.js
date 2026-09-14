@@ -3,7 +3,7 @@ import { createMetric, MetricStatus } from '../core/models/metric.js';
 import { createBinding } from '../core/models/binding.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
-import { createScenario } from '../core/models/scenario.js';
+import { createScenario, isValidScenarioCode } from '../core/models/scenario.js';
 import { createUnit } from '../core/models/unit.js';
 import { BindingType } from '../core/models/binding.js';
 import { parseFormula, distinctReferences, referenceIdentity } from './formula-parser.js';
@@ -146,6 +146,7 @@ export function parseSnapshot(input) {
   }
   for (const s of data.scenarios) {
     if (!s.code) errors.push(`Scenario "${s.id}" has no code`);
+    else if (!isValidScenarioCode(s.code)) errors.push(`Scenario code "${s.code}" is not valid: a letter, then up to 7 letters, digits or underscores`);
   }
   if (errors.length) return fail(errors);
 

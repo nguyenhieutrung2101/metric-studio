@@ -257,22 +257,26 @@ export function mountDimensionsView(container, ctx) {
   // ---------------------------------------------------------------- member editing
   async function addMember(dimensionId, parentId) {
     const parent = parentId ? store.get('dimensionMembers', parentId) : null;
-    const v = await promptDialog({ title: parent ? t('dims.addChildTitle', { name: parent.name }) : t('dims.addMember'), confirmLabel: t('common.create'), fields: [{ name: 'name', label: t('metric.field.name') }, { name: 'code', label: t('metric.field.code') }] });
-    if (!v || !v.name) return;
-    try {
-      const member = await services.dimensions.createMember({ dimensionId, parentId, name: v.name, code: v.code });
-      if (parentId) expanded.add(parentId);
-      rememberExpanded();
-      if (dimensionId !== state.dimensionId) selectDimension(dimensionId);
-      renderHierarchy();
-      selectMember(member.id);
-    } catch (err) { ctx.toast.error(err.message); }
+    const member = await promptDialog({
+      title: parent ? t('dims.addChildTitle', { name: parent.name }) : t('dims.addMember'),
+      confirmLabel: t('common.create'),
+      fields: [{ name: 'name', label: t('metric.field.name'), required: true }, { name: 'code', label: t('metric.field.code') }],
+      submit: (v) => services.dimensions.createMember({ dimensionId, parentId, name: v.name, code: v.code }),
+    });
+    if (!member) return;
+    if (parentId) expanded.add(parentId);
+    rememberExpanded();
+    if (dimensionId !== state.dimensionId) selectDimension(dimensionId);
+    renderHierarchy();
+    selectMember(member.id);
   }
 
   async function renameMember(member) {
-    const v = await promptDialog({ title: t('common.rename'), fields: [{ name: 'name', label: t('metric.field.name'), value: member.name }, { name: 'code', label: t('metric.field.code'), value: member.code }, { name: 'aliases', label: t('metric.field.aliases'), value: (member.aliases || []).join(', ') }] });
-    if (!v) return;
-    try { await services.dimensions.updateMember(member.id, v); } catch (err) { ctx.toast.error(err.message); }
+    await promptDialog({
+      title: t('common.rename'),
+      fields: [{ name: 'name', label: t('metric.field.name'), value: member.name, required: true }, { name: 'code', label: t('metric.field.code'), value: member.code }, { name: 'aliases', label: t('metric.field.aliases'), value: (member.aliases || []).join(', ') }],
+      submit: (v) => services.dimensions.updateMember(member.id, v),
+    });
   }
 
   async function moveMemberDialog(member) {
@@ -284,15 +288,17 @@ export function mountDimensionsView(container, ctx) {
       for (const c of entry.children) visit(c);
     };
     for (const r of tree.roots) visit(r);
-    const v = await promptDialog({ title: t('dims.moveMemberTitle', { name: member.name }), confirmLabel: t('common.move'), fields: [{ name: 'parentId', label: t('dims.newParent'), type: 'select', value: member.parentId || '', options }] });
+    const v = await promptDialog({
+      title: t('dims.moveMemberTitle', { name: member.name }),
+      confirmLabel: t('common.move'),
+      fields: [{ name: 'parentId', label: t('dims.newParent'), type: 'select', value: member.parentId || '', options }],
+      submit: async (values) => { await services.dimensions.moveMember(member.id, values.parentId || null); return { parentId: values.parentId }; },
+    });
     if (!v) return;
-    try {
-      await services.dimensions.moveMember(member.id, v.parentId || null);
-      if (v.parentId) expanded.add(v.parentId);
-      rememberExpanded();
-      const parent = v.parentId ? store.get('dimensionMembers', v.parentId) : null;
-      ctx.toast.success(t('dims.memberMoved', { name: member.name, parent: parent ? parent.name : t('mm.rootLevel') }));
-    } catch (err) { ctx.toast.error(err.message); }
+    if (v.parentId) expanded.add(v.parentId);
+    rememberExpanded();
+    const parent = v.parentId ? store.get('dimensionMembers', v.parentId) : null;
+    ctx.toast.success(t('dims.memberMoved', { name: member.name, parent: parent ? parent.name : t('mm.rootLevel') }));
   }
 
   async function deleteMember(member) {
@@ -307,15 +313,21 @@ export function mountDimensionsView(container, ctx) {
 
   // ---------------------------------------------------------------- dimension editing
   async function newDimension() {
-    const v = await promptDialog({ title: t('dims.new'), confirmLabel: t('common.create'), fields: [{ name: 'name', label: t('metric.field.name') }, { name: 'code', label: t('metric.field.code'), placeholder: services.dimensions.nextCode() }, { name: 'description', label: t('metric.field.definition') }] });
-    if (!v || !v.name) return;
-    try { const d = await services.dimensions.createDimension(v); selectDimension(d.id); } catch (err) { ctx.toast.error(err.message); }
+    const d = await promptDialog({
+      title: t('dims.new'),
+      confirmLabel: t('common.create'),
+      fields: [{ name: 'name', label: t('metric.field.name'), required: true }, { name: 'code', label: t('metric.field.code'), placeholder: services.dimensions.nextCode() }, { name: 'description', label: t('metric.field.definition') }],
+      submit: (v) => services.dimensions.createDimension(v),
+    });
+    if (d) selectDimension(d.id);
   }
 
   async function editDimension(d) {
-    const v = await promptDialog({ title: t('common.rename'), fields: [{ name: 'name', label: t('metric.field.name'), value: d.name }, { name: 'code', label: t('metric.field.code'), value: d.code }, { name: 'description', label: t('metric.field.definition'), value: d.description }] });
-    if (!v) return;
-    try { await services.dimensions.updateDimension(d.id, v); } catch (err) { ctx.toast.error(err.message); }
+    await promptDialog({
+      title: t('common.rename'),
+      fields: [{ name: 'name', label: t('metric.field.name'), value: d.name, required: true }, { name: 'code', label: t('metric.field.code'), value: d.code }, { name: 'description', label: t('metric.field.definition'), value: d.description }],
+      submit: (v) => services.dimensions.updateDimension(d.id, v),
+    });
   }
 
   async function deleteDimension(d) {

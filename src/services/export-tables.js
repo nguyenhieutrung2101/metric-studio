@@ -5,13 +5,19 @@
  *
  *   Bindings         one row per metric × scenario, with the formula text —
  *                    the logic as its author wrote it.
- *   Dependency_Edges one row per reference inside a formula — what a pipeline
- *                    needs to build lineage, execution order or impact
- *                    analysis without parsing formulas itself.
+ *   Dependency_Edges one row per reference OCCURRENCE inside a formula — what
+ *                    a pipeline needs to build lineage, execution order or
+ *                    impact analysis without parsing formulas itself. The
+ *                    in-app graph aggregates these per (metric, metric); the
+ *                    table does not, so nothing is lost in flattening.
  *
  * Keeping both is the point: the formula text is the source of truth and the
  * edge table is derived from it, so a consumer can always check one against
  * the other.
+ *
+ * Sequence, operator and AST path locate each operand; they do not by
+ * themselves reproduce every formula's executable semantics. A consumer that
+ * needs those reads Formula_Text, which is on every row.
  */
 
 export const BINDING_COLUMNS = [
@@ -32,6 +38,7 @@ export const BINDING_COLUMNS = [
 ];
 
 export const EDGE_COLUMNS = [
+  ['Edge_ID', (r) => r.edgeId || r.id],
   ['Target_Metric_ID', (r) => r.targetMetricId],
   ['Target_Code', (r) => r.targetCode],
   ['Target_Name', (r) => r.targetName],
@@ -46,6 +53,8 @@ export const EDGE_COLUMNS = [
   ['Dimension_Context', (r) => r.dimensionContext],
   ['Time_Context', () => ''],
   ['Operator_Function', (r) => r.operator],
+  ['AST_Path', (r) => r.astPath || ''],
+  ['Reference_Text', (r) => r.raw || ''],
   ['Resolved', (r) => (r.resolved ? 'yes' : 'no')],
   ['Formula_Text', (r) => r.formulaText],
 ];
@@ -80,10 +89,25 @@ export function bindingRows(store) {
 /**
  * RFC 4180 CSV with a BOM so spreadsheets open it as UTF-8. Every cell is
  * quoted: the formula text alone can hold commas, quotes and line breaks.
+ *
+ * Quoting does not stop a spreadsheet from executing a cell that starts with
+ * `=`, `+`, `-` or `@` — a metric named "=1+1" would run as a formula in
+ * Excel. `spreadsheetSafe` is for files meant to be opened in one: such
+ * cells get a leading apostrophe, the way Excel itself marks text, and the
+ * caller announces the transformation. Left off, the file is machine-readable
+ * and byte-faithful. Neither mode is a guarantee for every spreadsheet ever
+ * made; the policy is documented and tested against the OWASP list, not
+ * promised beyond it.
  */
-export function toCsv(rows, columns) {
-  const cell = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+export function toCsv(rows, columns, { spreadsheetSafe = false } = {}) {
+  const guard = (v) => (spreadsheetSafe && needsSpreadsheetGuard(v) ? `'${v}` : v);
+  const cell = (v) => `"${guard(String(v == null ? '' : v)).replace(/"/g, '""')}"`;
   const lines = [columns.map(([name]) => cell(name)).join(',')];
   for (const r of rows) lines.push(columns.map(([, pick]) => cell(pick(r))).join(','));
   return `﻿${lines.join('\r\n')}\r\n`;
+}
+
+/** Whether a value would be transformed by `spreadsheetSafe` (OWASP CSV injection triggers). */
+export function needsSpreadsheetGuard(v) {
+  return /^[=+\-@\t\r]/.test(String(v == null ? '' : v));
 }

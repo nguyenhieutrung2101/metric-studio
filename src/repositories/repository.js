@@ -41,6 +41,46 @@ export class NotFoundError extends Error {
   }
 }
 
+/**
+ * Thrown when a write cannot be made durable because the durable connection
+ * is gone — another tab upgraded the database under this one, for example.
+ * Fail closed: the mirror must not pretend the write landed.
+ */
+export class StorageUnavailableError extends Error {
+  constructor(reason = 'unavailable', detail = '') {
+    super(detail || `Storage is not available (${reason}); the change was not saved`);
+    this.name = 'StorageUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * Thrown by an adapter that cannot be atomic when a batch stopped halfway.
+ *
+ * `completed`, `failed` and `unknown` each list `{ op, collection, id }`:
+ * what the backend acknowledged, what it refused, and what was sent without
+ * an answer (a lost response). The unit of work re-reads every touched
+ * record from the backend before the error reaches the caller, so the
+ * store shows what is actually stored and a retry starts from fresh tokens
+ * instead of failing against the ones the batch was built on.
+ *
+ * An adapter that throws this must answer `get()` from the backend, not from
+ * a mirror: that is what the reconciliation reads.
+ */
+export class PartialBatchError extends Error {
+  constructor({ completed = [], failed = [], unknown = [], cause = null, message = '' } = {}) {
+    super(message || `Batch applied partially: ${completed.length} done, ${failed.length} failed, ${unknown.length} unknown`);
+    this.name = 'PartialBatchError';
+    this.completed = completed;
+    this.failed = failed;
+    this.unknown = unknown;
+    this.cause = cause;
+    // null until the unit of work has tried to reconcile; then true/false.
+    this.reconciled = null;
+    this.reconcileError = null;
+  }
+}
+
 export class NotImplementedError extends Error {
   constructor(what) {
     super(`${what} is not implemented`);
@@ -60,7 +100,15 @@ export class NotImplementedError extends Error {
  *    silently.
  * 3. `applyBatch`, `replaceAll` and `clear` are all-or-nothing. A failure
  *    anywhere leaves the store exactly as it was. An adapter that genuinely
- *    cannot be atomic must say so in `describe().atomicBatch === false`.
+ *    cannot be atomic must say so in `describe().atomicBatch === false` and,
+ *    when a batch stops halfway, throw PartialBatchError naming what landed,
+ *    what failed and what is unknown — never a plain error that hides the
+ *    partial state.
+ * 3b. A write that cannot be made durable (connection lost, superseded) is
+ *    refused with StorageUnavailableError. The mirror is never updated for
+ *    a write the backend did not acknowledge. `describe().writable` says
+ *    whether writes are currently accepted; `onStatusChange(fn)` reports
+ *    when that changes.
  * 4. Operations in a batch are applied IN THE ORDER GIVEN. An atomic adapter
  *    may ignore this, but a non-atomic one must not: services order their
  *    writes so that a partial failure degrades into a retryable state rather
@@ -76,9 +124,17 @@ export class Repository {
     return this;
   }
 
-  /** @returns {{ persistent: boolean, kind: string, atomicBatch: boolean, restorePoints: boolean, detail?: string }} */
+  /** @returns {{ persistent: boolean, kind: string, atomicBatch: boolean, restorePoints: boolean, writable: boolean, detail?: string }} */
   describe() {
-    return { persistent: false, kind: 'abstract', atomicBatch: false, restorePoints: false };
+    return { persistent: false, kind: 'abstract', atomicBatch: false, restorePoints: false, writable: true };
+  }
+
+  /**
+   * Subscribe to changes of what `describe()` reports — a durable connection
+   * that was lost, persistence that came back. Returns an unsubscribe.
+   */
+  onStatusChange(_fn) {
+    return () => {};
   }
 
   /** Full snapshot { collection: record[] } used to hydrate the store. */

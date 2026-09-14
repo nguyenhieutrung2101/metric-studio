@@ -28,6 +28,15 @@ import { referenceKey } from '../utils/text.js';
 
 const OPERATORS = new Set(['+', '-', '*', '/', '^']);
 
+/**
+ * Complexity budget at the boundary. A formula is typed by a person and read
+ * by a planner; one that exceeds these is a data problem to report, never a
+ * reason for the graph, the validation run or the app start to fall over.
+ * The parser is recursive descent, so nesting is bounded explicitly instead
+ * of by whatever the engine's stack happens to allow.
+ */
+export const FORMULA_LIMITS = Object.freeze({ maxLength: 20000, maxReferences: 500, maxDepth: 200 });
+
 export function tokenize(text) {
   const src = String(text ?? '');
   const tokens = [];
@@ -176,6 +185,11 @@ export function parseFormula(text) {
       if (err instanceof ParseError) {
         errors.push({ message: err.message, position: err.position });
         ast = null;
+      } else if (err instanceof RangeError) {
+        // The engine's own stack ran out before the depth budget did: still a
+        // formula problem, reported as one.
+        errors.push({ message: `Formula is too deeply nested (more than ${FORMULA_LIMITS.maxDepth} levels)`, position: 0 });
+        ast = null;
       } else {
         throw err;
       }
@@ -263,7 +277,16 @@ class Parser {
   }
 
   parseExpression() {
-    return this.parseAdditive();
+    this.depth = (this.depth || 0) + 1;
+    if (this.depth > FORMULA_LIMITS.maxDepth) {
+      const cur = this.peek();
+      throw new ParseError(`Formula is too deeply nested (more than ${FORMULA_LIMITS.maxDepth} levels)`, cur ? cur.start : 0);
+    }
+    try {
+      return this.parseAdditive();
+    } finally {
+      this.depth -= 1;
+    }
   }
 
   parseAdditive() {
@@ -291,12 +314,19 @@ class Parser {
   }
 
   parseUnary() {
-    const t = this.peek();
-    if (t && t.type === 'op' && (t.value === '-' || t.value === '+')) {
-      this.pos += 1;
-      return { type: 'unary', op: t.value, operand: this.parseUnary() };
+    // A run of signs is folded iteratively: "- - - - x" is not a reason to
+    // recurse once per sign.
+    const signs = [];
+    for (;;) {
+      const t = this.peek();
+      if (t && t.type === 'op' && (t.value === '-' || t.value === '+')) {
+        this.pos += 1;
+        signs.push(t.value);
+      } else break;
     }
-    return this.parsePower();
+    let node = this.parsePower();
+    for (let i = signs.length - 1; i >= 0; i -= 1) node = { type: 'unary', op: signs[i], operand: node };
+    return node;
   }
 
   parsePower() {
@@ -345,29 +375,50 @@ class Parser {
   }
 }
 
+/**
+ * Every reference occurrence in an AST, in source order, with where it sits:
+ * the operator or function it is a direct operand of, and the path of
+ * operators from the root. Iterative on purpose — a long flat formula is a
+ * deep left-leaning tree, and a recursive walk over it is what took the app
+ * down at start-up.
+ *
+ * @returns {Array<{ node, operator: string, path: string }>}
+ */
+export function astReferenceOccurrences(ast) {
+  const out = [];
+  if (!ast) return out;
+  // Children are pushed right-to-left so they pop in source order.
+  const stack = [{ node: ast, operator: '', path: [] }];
+  while (stack.length) {
+    const { node, operator, path } = stack.pop();
+    if (!node) continue;
+    switch (node.type) {
+      case 'reference':
+        out.push({ node, operator, path: path.join('/') });
+        break;
+      case 'binary':
+        stack.push({ node: node.right, operator: node.op, path: [...path, `${node.op}:right`] });
+        stack.push({ node: node.left, operator: node.op, path: [...path, `${node.op}:left`] });
+        break;
+      case 'unary':
+        stack.push({ node: node.operand, operator: node.op, path: [...path, `${node.op}:operand`] });
+        break;
+      case 'group':
+        stack.push({ node: node.expression, operator, path });
+        break;
+      case 'call':
+        for (let i = node.args.length - 1; i >= 0; i -= 1) stack.push({ node: node.args[i], operator: node.name, path: [...path, `${node.name}:arg${i + 1}`] });
+        break;
+      default:
+        break;
+    }
+  }
+  return out;
+}
+
 /** Walk an AST and collect reference nodes (used by tests and tooling). */
 export function collectAstReferences(ast, out = []) {
-  if (!ast) return out;
-  switch (ast.type) {
-    case 'reference':
-      out.push(ast);
-      break;
-    case 'binary':
-      collectAstReferences(ast.left, out);
-      collectAstReferences(ast.right, out);
-      break;
-    case 'unary':
-      collectAstReferences(ast.operand, out);
-      break;
-    case 'group':
-      collectAstReferences(ast.expression, out);
-      break;
-    case 'call':
-      for (const a of ast.args) collectAstReferences(a, out);
-      break;
-    default:
-      break;
-  }
+  for (const o of astReferenceOccurrences(ast)) out.push(o.node);
   return out;
 }
 

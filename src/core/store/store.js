@@ -21,6 +21,23 @@ export class Store {
       this._listCache[c] = null;
     }
     this.globalRevision = 0;
+    // Whether this cache is known to match the backend. A partial batch that
+    // could not be reconciled marks the collections it touched as unsynced;
+    // the next hydrate clears it.
+    this.sync = { ok: true, collections: [], error: null };
+  }
+
+  /** Events: 'sync' -> { ok, collections, error } */
+  markUnsynced(collections, error = null) {
+    const set = new Set([...(this.sync.ok ? [] : this.sync.collections), ...collections]);
+    this.sync = { ok: false, collections: [...set], error };
+    this.events.emit('sync', this.sync);
+  }
+
+  markSynced() {
+    if (this.sync.ok) return;
+    this.sync = { ok: true, collections: [], error: null };
+    this.events.emit('sync', this.sync);
   }
 
   _touch(collection) {
@@ -42,6 +59,7 @@ export class Store {
       this.data[c] = map;
       this._touch(c);
     }
+    this.markSynced();
     this.events.emit('change', { collection: '*', type: 'hydrate', ids: [] });
   }
 

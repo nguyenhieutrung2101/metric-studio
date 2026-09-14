@@ -3,14 +3,14 @@ import { t } from '../../ui/i18n.js';
 import { section } from '../../ui/components/section.js';
 import { combobox } from '../../ui/components/combobox.js';
 import { openMenu } from '../../ui/components/menu.js';
-import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
+import { confirmDialog, promptDialog, decisionDialog } from '../../ui/components/confirm.js';
 import { statusChip, severityDot } from '../../ui/components/chip.js';
 import { METRIC_STATUSES } from '../../core/models/metric.js';
 import { chipInput } from '../../ui/components/chip-input.js';
 import { refPicker } from '../../ui/components/ref-picker.js';
 import { parseFormula, referenceIdentity } from '../../services/formula-parser.js';
 import { BindingType, BINDING_STATUSES } from '../../core/models/binding.js';
-import { ConflictError, tokenOf } from '../../repositories/repository.js';
+import { ConflictError, StorageUnavailableError, PartialBatchError, tokenOf } from '../../repositories/repository.js';
 import { debounce } from '../../utils/debounce.js';
 import { formatDateTime } from '../../utils/time.js';
 import { worstSeverity } from '../../services/validation-service.js';
@@ -75,9 +75,31 @@ export class MetricDrawer {
     return this.drawer.close();
   }
 
+  /**
+   * Closing with unsaved changes is a decision, kept on screen until it is
+   * made: save and close, discard, or stay. Never a toast that times out.
+   */
   async _confirmDiscard() {
     if (!this._isDirty()) return true;
-    return confirmDialog({ title: t('drawer.discardTitle'), message: t('drawer.discardMessage'), confirmLabel: t('drawer.discard'), danger: true });
+    const choice = await decisionDialog({
+      title: t('drawer.unsavedTitle'),
+      message: t('drawer.unsavedMessage', { what: this._pendingLabel() }),
+      actions: [
+        { value: 'save', label: t('drawer.saveAndClose'), kind: 'primary' },
+        { value: 'discard', label: t('drawer.discard'), kind: 'danger' },
+        { value: 'stay', label: t('drawer.stay') },
+      ],
+      cancelValue: 'stay',
+    });
+    if (choice === 'save') {
+      await this.save();
+      return !this._isDirty();
+    }
+    if (choice === 'discard') {
+      this._discardChanges();
+      return true;
+    }
+    return false;
   }
 
   _isDirty() {
@@ -420,7 +442,8 @@ export class MetricDrawer {
     }
 
     const actions = h('div', { class: 'binding-actions' });
-    actions.appendChild(btn(t('binding.save', { scenario: scenario.code }), { kind: 'primary', size: 'sm', on: { click: () => this.saveBinding(scenarioId) } }));
+    this.els.bindingSaveBtn = btn(t('binding.save', { scenario: scenario.code }), { kind: 'primary', size: 'sm', on: { click: () => this.saveBinding(scenarioId) } });
+    actions.appendChild(this.els.bindingSaveBtn);
     if (state.base) actions.appendChild(btn(t('binding.remove'), { size: 'sm', icon: 'trash', on: { click: () => this._removeBinding(scenarioId) } }));
     if (state.base) actions.appendChild(h('span', { class: 'muted small', text: t('drawer.versionInfo', { v: state.base.version, at: formatDateTime(state.base.updatedAt) }) }));
     panel.appendChild(actions);
@@ -449,7 +472,14 @@ export class MetricDrawer {
       onPick: (item) => {
         const m = this.ctx.store.get('metrics', item.id);
         if (!m) return;
-        const token = (m.aliases && m.aliases[0]) || m.code;
+        const token = this._referenceTokenFor(m);
+        if (!token) {
+          // Say so and leave the bracket open with the caret where it was,
+          // rather than insert a token that only looks like it worked.
+          this.ctx.toast.error(t('binding.pickAmbiguous', { name: m.name, code: m.code }), { duration: 7000 });
+          textarea.focus();
+          return;
+        }
         replaceOpenBracket(textarea, `[${token}]`);
         commit();
         textarea.focus();
@@ -577,29 +607,30 @@ export class MetricDrawer {
     const nodes = ctx.store.list('structureNodes');
     const placements = ctx.selectors.placementsByMetric(this.metricId);
     const defaultNode = placements.find((p) => p.isPrimary) || placements[0];
-    const values = await promptDialog({
+    const scenarioId = this.activeScenarioId;
+    const seq = this._openSeq;
+    await promptDialog({
       title: t('binding.createDraftTitle', { token: ref.token }),
       confirmLabel: t('binding.createDraftConfirm'),
       fields: [
-        { name: 'name', label: t('metric.field.name'), value: ref.token },
+        { name: 'name', label: t('metric.field.name'), value: ref.token, required: true },
         nodes.length ? { name: 'structureNodeId', label: t('drawer.section.structure'), type: 'select', value: defaultNode ? defaultNode.structureNodeId : '', options: nodeOptions(ctx) } : null,
       ].filter(Boolean),
+      // The dialog stays open, values intact, if either step fails.
+      submit: async (values) => {
+        // Persist the binding first so the reference can be re-resolved on a stored record.
+        const savedBinding = await this._persistBinding(scenarioId, { silent: true });
+        if (!savedBinding) throw new Error(t('binding.formulaEmpty'));
+        const { metric } = await ctx.services.bindings.createDraftFromReference(savedBinding.id, ref.token, { structureNodeId: values.structureNodeId || null, name: values.name || ref.token });
+        if (seq !== this._openSeq) return metric;
+        ctx.toast.success(t('binding.draftCreated', { code: metric.code, name: metric.name }), { action: { label: t('common.open'), onClick: () => this.open(metric.id) } });
+        this.bindingDrafts.delete(scenarioId);
+        this._renderBindingTabs();
+        this._renderBindingPanel();
+        this._updateDirty();
+        return metric;
+      },
     });
-    if (!values) return;
-    try {
-      // Persist the binding first so the reference can be re-resolved on a stored record.
-      const scenarioId = this.activeScenarioId;
-      const savedBinding = await this._persistBinding(scenarioId, { silent: true });
-      if (!savedBinding) return;
-      const { metric } = await ctx.services.bindings.createDraftFromReference(savedBinding.id, ref.token, { structureNodeId: values.structureNodeId || null, name: values.name || ref.token });
-      ctx.toast.success(t('binding.draftCreated', { code: metric.code, name: metric.name }), { action: { label: t('common.open'), onClick: () => this.open(metric.id) } });
-      this.bindingDrafts.delete(scenarioId);
-      this._renderBindingTabs();
-      this._renderBindingPanel();
-      this._updateDirty();
-    } catch (err) {
-      this._handleError(err);
-    }
   }
 
   _openOther(metricId, scenarioId) {
@@ -621,24 +652,60 @@ export class MetricDrawer {
       return true;
     }
     this._revealPending(pending);
-    this.ctx.toast.info(t('drawer.saveFirstWhat', { what: this._pendingLabel(pending) }), {
-      duration: 8000,
+    // The decision stays on screen until it is made. A save that fails
+    // leaves the editor where it was, with its drafts; nothing proceeds.
+    decisionDialog({
+      title: t('drawer.unsavedTitle'),
+      message: t('drawer.saveFirstWhat', { what: this._pendingLabel(pending) }),
       actions: [
-        { label: t('drawer.saveAllAndGo'), onClick: async () => {
-          await this.save();
-          if (!this._isDirty()) proceed();
-        } },
-        { label: t('drawer.discardAndGo'), onClick: () => {
-          this._discardChanges();
-          proceed();
-        } },
+        { value: 'save', label: t('drawer.saveAllAndGo'), kind: 'primary' },
+        { value: 'discard', label: t('drawer.discardAndGo'), kind: 'danger' },
+        { value: 'stay', label: t('drawer.stay') },
       ],
+      cancelValue: 'stay',
+    }).then(async (choice) => {
+      if (choice === 'save') {
+        await this.save();
+        if (!this._isDirty()) proceed();
+      } else if (choice === 'discard') {
+        this._discardChanges();
+        proceed();
+      }
     });
     return false;
   }
 
   isDirty() {
     return this.drawer.isOpen() && this._isDirty();
+  }
+
+  /** A save is in flight: the browser must not unload without asking. */
+  isSaving() {
+    return !!this._flight;
+  }
+
+  /** Storage became writable or read-only: the Save buttons follow. */
+  refreshWritable() {
+    if (this.metricId && this.els.saveBtn) this._updateDirty();
+  }
+
+  /**
+   * Pick the token a formula should use for a metric: the first of code,
+   * aliases and name that resolves uniquely back to that metric. The picker
+   * knows which metric was chosen; serialising it as an alias two metrics
+   * share would throw that knowledge away and insert something that looks
+   * inserted but resolves to nothing.
+   * @returns {string|null} null when no unambiguous token exists
+   */
+  _referenceTokenFor(m) {
+    const { selectors } = this.ctx;
+    const candidates = [m.code, ...(m.aliases || []), m.name].filter(Boolean);
+    for (const c of candidates) {
+      if (/[[\]|:]/.test(c)) continue; // cannot be written inside brackets
+      const r = selectors.resolveReference(c);
+      if (r.status === 'resolved' && r.metricId === m.id) return c;
+    }
+    return null;
   }
 
   /** Bring the editor that is holding the unsaved change into view. */
@@ -700,8 +767,21 @@ export class MetricDrawer {
   _updateDirty() {
     const pending = this._pending();
     const dirty = pending.count > 0;
-    this.els.saveBtn.disabled = !dirty;
-    this.els.saveBtn.classList.toggle('pulse', dirty);
+    const writable = !this.ctx.storage || this.ctx.storage.writable;
+    const saving = !!this._flight;
+    // Disabled while a save is in flight — a second click must not send the
+    // same base token twice — and while storage cannot take a write.
+    this.els.saveBtn.disabled = !dirty || saving || !writable;
+    this.els.saveBtn.setAttribute('aria-busy', String(saving));
+    this.els.saveBtn.classList.toggle('pulse', dirty && !saving && writable);
+    if (this.els.bindingSaveBtn) {
+      this.els.bindingSaveBtn.disabled = saving || !writable;
+      this.els.bindingSaveBtn.setAttribute('aria-busy', String(saving));
+    }
+    if (!writable) {
+      this.els.saveBtn.title = t('io.storageReadOnly');
+      return this._announce(dirty);
+    }
     // Two Save buttons are visible at once and they do not cover the same
     // thing. The count says which one saves everything.
     const label = this.els.saveBtn.querySelector('.btn-label') || this.els.saveBtn;
@@ -711,12 +791,33 @@ export class MetricDrawer {
       const nameEl = this.els.title.querySelector('.drawer-name');
       if (nameEl && this.draft) nameEl.textContent = this.draft.name || this.base.name;
     }
+    this._announce(dirty);
+  }
+
+  _announce(dirty) {
     const mode = dirty ? 'editing' : 'viewing';
     this.ctx.services.presence.announce({ entityType: 'metric', entityId: this.metricId, mode });
   }
 
-  async save() {
-    if (!this.metricId) return;
+  /**
+   * One save in flight per drawer. A second Save — double-click, Ctrl+S
+   * held, the header's "Save all" while a binding's own Save is running —
+   * joins the flight instead of sending the same base token twice and
+   * conflicting with itself. Typing during the flight is kept: the drafts
+   * are compared against what was sent, not blanked.
+   */
+  save() {
+    if (!this.metricId) return Promise.resolve();
+    if (this._flight) return this._flight;
+    this._flight = this._saveAll().finally(() => {
+      this._flight = null;
+      if (this.metricId) this._updateDirty();
+    });
+    this._updateDirty();
+    return this._flight;
+  }
+
+  async _saveAll() {
     const { ctx } = this;
     let savedAny = false;
     const seqAtStart = this._openSeq;
@@ -755,7 +856,17 @@ export class MetricDrawer {
     }
   }
 
-  async saveBinding(scenarioId) {
+  saveBinding(scenarioId) {
+    if (this._flight) return this._flight;
+    this._flight = this._saveOneBinding(scenarioId).finally(() => {
+      this._flight = null;
+      if (this.metricId) this._updateDirty();
+    });
+    this._updateDirty();
+    return this._flight;
+  }
+
+  async _saveOneBinding(scenarioId) {
     const seq = this._openSeq;
     try {
       const saved = await this._persistBinding(scenarioId, { silent: true });
@@ -876,6 +987,14 @@ export class MetricDrawer {
     }
     if (err && err.name === 'UniquenessError') {
       this.ctx.toast.error(t('error.duplicateRelationship'));
+      return;
+    }
+    if (err instanceof StorageUnavailableError) {
+      this.ctx.toast.error(t('io.storageSuperseded'), { sticky: true, action: { label: t('io.reload'), onClick: () => window.location.reload() } });
+      return;
+    }
+    if (err instanceof PartialBatchError) {
+      this.ctx.toast.error(t(err.reconciled ? 'error.partialBatch' : 'error.partialBatchUnsynced'), { sticky: true, action: err.reconciled ? null : { label: t('io.reload'), onClick: () => window.location.reload() } });
       return;
     }
     if (err && err.name === 'ValidationFailure') {

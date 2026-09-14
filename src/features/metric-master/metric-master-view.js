@@ -347,25 +347,23 @@ export function mountMetricMasterView(container, ctx) {
   async function newMetric(nodeId = null) {
     const targetNode = nodeId || (state.nodeId !== 'all' && state.nodeId !== 'unplaced' ? state.nodeId : null);
     const options = [{ value: '', label: t('mm.noPlacement') }, ...nodeOptions(ctx)];
-    const values = await promptDialog({
+    const created = await promptDialog({
       title: t('mm.newMetricTitle'),
       confirmLabel: t('common.create'),
       fields: [
-        { name: 'name', label: t('metric.field.name'), placeholder: t('drawer.namePlaceholder') },
+        { name: 'name', label: t('metric.field.name'), placeholder: t('drawer.namePlaceholder'), required: true },
         { name: 'structureNodeId', label: t('drawer.section.structure'), type: 'select', value: targetNode || '', options },
       ],
+      // The dialog stays open with the name typed if the save fails.
+      submit: async (values) => ({ metric: await services.metrics.create({ name: values.name }, { structureNodeId: values.structureNodeId || null }), structureNodeId: values.structureNodeId }),
     });
-    if (!values || !values.name) return;
-    try {
-      const m = await services.metrics.create({ name: values.name }, { structureNodeId: values.structureNodeId || null });
-      ctx.toast.success(t('mm.metricCreated', { code: m.code }));
-      if (values.structureNodeId && state.nodeId !== 'all' && !selectors.metricIdsUnderNode(state.nodeId).has(m.id)) selectNode(values.structureNodeId);
-      refreshList();
-      select(m.id);
-      openMetric(m.id);
-    } catch (err) {
-      ctx.toast.error(err.message);
-    }
+    if (!created) return;
+    const m = created.metric;
+    ctx.toast.success(t('mm.metricCreated', { code: m.code }));
+    if (created.structureNodeId && state.nodeId !== 'all' && !selectors.metricIdsUnderNode(state.nodeId).has(m.id)) selectNode(created.structureNodeId);
+    refreshList();
+    select(m.id);
+    openMetric(m.id);
   }
 
   // ---------------------------------------------------------------- sync

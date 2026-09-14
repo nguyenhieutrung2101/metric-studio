@@ -1,3 +1,5 @@
+import { PartialBatchError } from '../repositories/repository.js';
+
 /**
  * Unit of work: a set of writes that must land together or not at all.
  *
@@ -71,9 +73,50 @@ export class UnitOfWork {
 export async function commit(repo, store, work) {
   const ops = work instanceof UnitOfWork ? work.ops : work;
   if (!ops.length) return { saved: [], removed: [] };
-  const result = await repo.applyBatch(ops, batchOptions(work));
-  mirror(store, result);
-  return result;
+  try {
+    const result = await repo.applyBatch(ops, batchOptions(work));
+    mirror(store, result);
+    return result;
+  } catch (err) {
+    if (err instanceof PartialBatchError) await reconcile(repo, store, ops, err);
+    throw err;
+  }
+}
+
+/**
+ * A batch stopped halfway on a backend that cannot roll back. The store must
+ * not keep showing the world as it was before the batch: some of it landed.
+ * Every record the batch touched is re-read from the backend and mirrored,
+ * so what the user sees is what is stored and a retry is built on fresh
+ * tokens. If even that fails, the store says so — the affected collections
+ * are marked unsynced until the next hydrate — rather than guessing.
+ */
+async function reconcile(repo, store, ops, err) {
+  const touched = new Map();
+  const note = (collection, id) => { if (collection && id) touched.set(`${collection}/${id}`, { collection, id }); };
+  for (const op of ops) note(op.collection, op.record ? op.record.id : op.id);
+  for (const list of [err.completed, err.failed, err.unknown]) for (const t of list || []) note(t.collection, t.id);
+  const collections = [...new Set([...touched.values()].map((t) => t.collection))];
+  try {
+    const upserts = {};
+    const removals = {};
+    for (const { collection, id } of touched.values()) {
+      const current = await repo.get(collection, id);
+      if (current) {
+        if (!upserts[collection]) upserts[collection] = [];
+        upserts[collection].push(current);
+      } else {
+        if (!removals[collection]) removals[collection] = [];
+        removals[collection].push(id);
+      }
+    }
+    store.applyChanges({ upserts, removals });
+    err.reconciled = true;
+  } catch (readErr) {
+    err.reconciled = false;
+    err.reconcileError = readErr;
+    store.markUnsynced(collections, readErr);
+  }
 }
 
 /**
@@ -82,14 +125,21 @@ export async function commit(repo, store, work) {
  * `plan` receives a handle onto the repository's own records.
  */
 export async function commitExclusive(repo, store, plan) {
-  const result = await repo.runExclusive(async (tx) => {
-    const work = await plan(tx);
-    const ops = work instanceof UnitOfWork ? work.ops : work;
-    if (!ops || !ops.length) return { saved: [], removed: [] };
-    return tx.applyBatch(ops, batchOptions(work));
-  });
-  mirror(store, result);
-  return result;
+  let sentOps = [];
+  try {
+    const result = await repo.runExclusive(async (tx) => {
+      const work = await plan(tx);
+      const ops = work instanceof UnitOfWork ? work.ops : work;
+      if (!ops || !ops.length) return { saved: [], removed: [] };
+      sentOps = ops;
+      return tx.applyBatch(ops, batchOptions(work));
+    });
+    mirror(store, result);
+    return result;
+  } catch (err) {
+    if (err instanceof PartialBatchError) await reconcile(repo, store, sentOps, err);
+    throw err;
+  }
 }
 
 function batchOptions(work) {

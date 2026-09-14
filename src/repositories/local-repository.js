@@ -1,9 +1,10 @@
-import { COLLECTIONS, ConflictError, NotFoundError, clone, tokenOf } from './repository.js';
+import { COLLECTIONS, ConflictError, NotFoundError, StorageUnavailableError, clone, tokenOf } from './repository.js';
+import { splitList } from '../utils/text.js';
 import { MemoryRepository, UniquenessError } from './memory-repository.js';
 import { UNIQUE_KEYS, uniqueKeyOf } from '../core/collections.js';
 
 const DB_NAME = 'metric-studio';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const RESTORE_STORE = '_restorePoints';
 const SEQUENCE_STORE = '_sequences';
 const UNIQUE_INDEX = 'uk';
@@ -52,6 +53,11 @@ export class LocalRepository extends MemoryRepository {
       kind: this._persistent ? 'indexeddb' : 'memory',
       atomicBatch: true,
       restorePoints: true,
+      // A session that never had IndexedDB, or whose user chose to continue
+      // without it, writes to memory on purpose and is told so. A connection
+      // that was durable and then lost is a different thing: its writes are
+      // refused, because acknowledging them would be a lie.
+      writable: this._reason !== 'superseded',
       reason: this._persistent ? null : this._reason,
       // "No IndexedDB" is the only case where nothing of the user's can be
       // on disk. Every other failure means a database exists that this
@@ -79,6 +85,7 @@ export class LocalRepository extends MemoryRepository {
         this._persistent = false;
         this._reason = 'superseded';
         this._error = new Error('Another tab opened a newer version of Metric Studio');
+        this._emitStatus();
       };
       await this.refresh();
     } catch (err) {
@@ -113,9 +120,21 @@ export class LocalRepository extends MemoryRepository {
     return this;
   }
 
+  /**
+   * A durable connection that was lost refuses every write. The memory
+   * session a user knowingly continues in (no IndexedDB, or a database that
+   * would not open) keeps writing to memory, as it always did.
+   */
+  _assertWritable() {
+    if (this._reason === 'superseded') throw new StorageUnavailableError('superseded', this._error ? this._error.message : '');
+  }
+
   /** One transaction for the whole plan: all of it lands, or none of it does. */
   async _commit(plan) {
-    if (!this._db) return;
+    if (!this._db) {
+      this._assertWritable();
+      return;
+    }
     const { clearAll = false, puts = [], deletes = [], guards = [], requires = [] } = plan;
     const touched = new Set();
     if (clearAll) {
@@ -213,7 +232,10 @@ export class LocalRepository extends MemoryRepository {
    * stored sequence yet, so the floor is derived from the records themselves.
    */
   async _nextSequenceValue(desc) {
-    if (!this._db) return super._nextSequenceValue(desc);
+    if (!this._db) {
+      this._assertWritable();
+      return super._nextSequenceValue(desc);
+    }
     const { key, collection, floorOf } = desc;
     // The floor comes from the records in the database, read in the same
     // transaction: this connection's mirror does not know what another tab
@@ -243,7 +265,10 @@ export class LocalRepository extends MemoryRepository {
   }
 
   async _commitRestorePoint(point) {
-    if (!this._db) return;
+    if (!this._db) {
+      this._assertWritable();
+      return;
+    }
     const tx = this._db.transaction(RESTORE_STORE, 'readwrite');
     try {
       tx.objectStore(RESTORE_STORE).put(point);
@@ -256,7 +281,10 @@ export class LocalRepository extends MemoryRepository {
   }
 
   async _deleteRestorePoint(id) {
-    if (!this._db) return;
+    if (!this._db) {
+      this._assertWritable();
+      return;
+    }
     const tx = this._db.transaction(RESTORE_STORE, 'readwrite');
     tx.objectStore(RESTORE_STORE).delete(id);
     await txDone(tx);
@@ -285,7 +313,7 @@ export class LocalRepository extends MemoryRepository {
 function openDatabase(idb, name, version, { blockedTimeoutMs = 4000 } = {}) {
   return new Promise((resolve, reject) => {
     let req;
-    const migration = { deduplicated: 0, removed: [] };
+    const migration = { deduplicated: 0, removed: [], ownersMigrated: 0 };
     let blockedTimer = null;
     let settled = false;
     const finish = (fn) => (value) => {
@@ -302,9 +330,10 @@ function openDatabase(idb, name, version, { blockedTimeoutMs = 4000 } = {}) {
       bad(tagged(err, 'open-failed'));
       return;
     }
-    req.onupgradeneeded = () => {
+    req.onupgradeneeded = (event) => {
       const db = req.result;
       const tx = req.transaction;
+      const oldVersion = event && Number.isFinite(event.oldVersion) ? event.oldVersion : 0;
       tx.onabort = () => bad(tagged(tx.error || new Error('Upgrade aborted'), 'upgrade-failed'));
       for (const c of COLLECTIONS) {
         const store = db.objectStoreNames.contains(c) ? tx.objectStore(c) : db.createObjectStore(c, { keyPath: 'id' });
@@ -317,6 +346,10 @@ function openDatabase(idb, name, version, { blockedTimeoutMs = 4000 } = {}) {
       }
       if (!db.objectStoreNames.contains(RESTORE_STORE)) db.createObjectStore(RESTORE_STORE, { keyPath: 'id' });
       if (!db.objectStoreNames.contains(SEQUENCE_STORE)) db.createObjectStore(SEQUENCE_STORE, { keyPath: 'id' });
+      // v4: a metric has `owners` (several), no longer `owner` (one). Records
+      // written by an earlier release are rewritten in place — same id, same
+      // version and token, same timestamps — so nothing else notices.
+      if (oldVersion < 4 && oldVersion > 0) migrateOwners(tx.objectStore('metrics'), migration);
     };
     req.onsuccess = () => ok({ db: req.result, migration });
     req.onerror = () => bad(tagged(req.error || new Error('IndexedDB open failed'), req.error && req.error.name === 'AbortError' ? 'upgrade-failed' : 'open-failed'));
@@ -370,6 +403,29 @@ function dedupeThenIndex(store, collection, fields, migration) {
       return;
     }
     store.createIndex(UNIQUE_INDEX, fields, { unique: true });
+  };
+}
+
+/**
+ * Rewrite `owner: 'Alice'` as `owners: ['Alice']` inside the upgrade
+ * transaction. A record that already carries `owners` keeps it; a legacy
+ * `owner` is only used when `owners` is absent or empty, so no stored value
+ * is silently replaced by an empty list.
+ */
+function migrateOwners(store, migration) {
+  const cursor = store.openCursor();
+  cursor.onsuccess = () => {
+    const cur = cursor.result;
+    if (!cur) return;
+    const record = cur.value;
+    if (record && typeof record === 'object' && ('owner' in record || !Array.isArray(record.owners))) {
+      const owners = Array.isArray(record.owners) && record.owners.length ? record.owners : splitList(record.owner);
+      const next = { ...record, owners };
+      delete next.owner;
+      cur.update(next);
+      migration.ownersMigrated += 1;
+    }
+    cur.continue();
   };
 }
 

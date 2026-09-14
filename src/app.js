@@ -104,9 +104,11 @@ export async function start(rootEl) {
   const shell = buildShell(rootEl);
   const toast = createToast(shell.toastHost);
   const drawer = createDrawer(shell.drawerHost);
+  // Where writes go, as of now — not as of start-up. Every page reads this.
+  const storage = createStorageStatus(repo, store);
 
   const ctx = {
-    store, selectors, repo, services, validation, router, toast, repoInfo: repo.describe(),
+    store, selectors, repo, services, validation, router, toast, storage, repoInfo: repo.describe(),
     currentMetricId: null,
     /**
      * Open a metric in the drawer. Refused — with the ways out offered on a
@@ -201,26 +203,40 @@ export async function start(rootEl) {
       ...DENSITIES.map((d) => ({ label: t(`density.${d}`), active: getDensity() === d, onClick: () => setDensity(d) })),
       { separator: true },
       { heading: t('nav.language') },
-      ...LANGUAGES.map((l) => ({ label: l.label, active: getLanguage() === l.code, onClick: () => setLanguage(l.code) })),
+      // Changing the language reloads the page: the same guard as any other
+      // way of leaving an editor with unsaved changes.
+      ...LANGUAGES.map((l) => ({ label: l.label, active: getLanguage() === l.code, onClick: () => metricDrawer.guardThen(() => setLanguage(l.code)) })),
       { separator: true },
-      { heading: ctx.repoInfo.persistent ? t('io.storagePersistent') : t('io.storageMemory') },
+      { heading: storageLabel(storage.info) },
     ]);
   });
   validation.onChange((index) => shell.setWarnings(index.bySeverity));
   onLanguageChange(() => window.location.reload());
-  if (!ctx.repoInfo.persistent) setTimeout(() => toast.info(t(ctx.repoInfo.hasExistingData ? 'io.storageUnsaved' : 'io.storageMemory'), { duration: 8000 }), 800);
   if (ctx.repoInfo.migration && ctx.repoInfo.migration.deduplicated > 0) {
     setTimeout(() => toast.info(t('io.migrationDeduplicated', { n: ctx.repoInfo.migration.deduplicated }), { duration: 10000 }), 1400);
   }
-  // A newer release in another tab took the database over; this tab can only
-  // watch. Say so the moment it happens rather than on the next failed save.
-  const watchSuperseded = setInterval(() => {
-    const now = repo.describe();
-    if (now.reason === 'superseded') {
-      clearInterval(watchSuperseded);
-      toast.error(t('io.storageSuperseded'), { duration: 60000, action: { label: t('io.reload'), onClick: () => window.location.reload() } });
+  // The storage banner says, on every page, where writes are going right
+  // now: memory only, refused because another tab took the database over,
+  // or out of step with the backend after a partial write. Losing the durable
+  // connection is announced the moment it happens, not on the next failed
+  // save, and the Save buttons follow.
+  const applyStorage = (info) => {
+    shell.setStorage(info);
+    metricDrawer.refreshWritable();
+    if (info.reason === 'superseded') toast.error(t('io.storageSuperseded'), { sticky: true, action: { label: t('io.reload'), onClick: () => window.location.reload() } });
+    else if (!info.sync.ok) toast.error(t('io.storageBanner.unsynced'), { sticky: true, action: { label: t('io.reload'), onClick: () => window.location.reload() } });
+  };
+  storage.onChange(applyStorage);
+  shell.setStorage(storage.info);
+  // The browser's own "leave this page?" prompt, while an editor holds a
+  // draft or a save has not been acknowledged yet. Best effort: a killed
+  // process gets no prompt, and nothing is auto-saved on the way out.
+  window.addEventListener('beforeunload', (e) => {
+    if (metricDrawer.isDirty() || metricDrawer.isSaving()) {
+      e.preventDefault();
+      e.returnValue = '';
     }
-  }, 2000);
+  });
 
   validation.run();
   router.start();
@@ -277,6 +293,39 @@ function createValidationRunner({ store, selectors, dependencies }) {
   };
 }
 
+/**
+ * Observable storage status: what `repo.describe()` says, plus whether the
+ * store is known to match the backend, refreshed whenever either changes.
+ */
+function createStorageStatus(repo, store) {
+  const listeners = new Set();
+  const snapshot = () => ({ ...repo.describe(), sync: store.sync });
+  let info = snapshot();
+  const notify = () => {
+    info = snapshot();
+    for (const fn of [...listeners]) fn(info);
+  };
+  repo.onStatusChange(notify);
+  store.events.on('sync', notify);
+  return {
+    get info() { return info; },
+    get writable() { return info.writable !== false && info.sync.ok; },
+    onChange(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+    label: () => storageLabel(info),
+  };
+}
+
+/** One sentence on where the data is right now. */
+function storageLabel(info) {
+  if (info.reason === 'superseded') return t('io.storageSuperseded');
+  if (info.sync && !info.sync.ok) return t('io.storageBanner.unsynced');
+  if (info.persistent) return t('io.storagePersistent');
+  return t(info.hasExistingData ? 'io.storageUnsaved' : 'io.storageMemory');
+}
+
 function describeIssue(issue) {
   const key = `issue.${issue.code}`;
   const text = t(key, issue.params);
@@ -291,10 +340,15 @@ function buildShell(rootEl) {
   const warningsBtn = h('button', { type: 'button', class: 'topbar-btn warnings-btn', title: t('nav.warnings') }, icon('warning'), warnCount);
   const moreBtn = h('button', { type: 'button', class: 'topbar-btn', title: t('nav.more') }, h('span', { text: t('nav.more') }), icon('chevronDown', { size: 14 }));
   const topbar = h('header', { class: 'topbar' }, brand, navEl, h('div', { class: 'topbar-right' }, warningsBtn, moreBtn));
+  const banner = h('div', { class: 'storage-banner', role: 'status', hidden: true });
   const viewHost = h('main', { class: 'view', id: 'view' });
+  // The drawer lives inside the view, so its top edge is wherever the view
+  // starts — after the top bar, any banner, any second row — with no offset
+  // to keep in step by hand.
   const drawerHost = h('div', { class: 'drawer-host' });
+  viewHost.appendChild(drawerHost);
   const toastHost = h('div', { class: 'toast-host' });
-  rootEl.replaceChildren(topbar, subnav, viewHost, drawerHost, toastHost);
+  rootEl.replaceChildren(topbar, subnav, banner, viewHost, toastHost);
   const links = new Map();
   let navigateTo = null;
   const go = (p) => (e) => {
@@ -332,6 +386,22 @@ function buildShell(rootEl) {
       rootEl.classList.toggle('has-subnav', !subnav.hidden);
       moreBtn.classList.toggle('active', SECONDARY.includes(path));
       warningsBtn.classList.toggle('active', path === 'quality');
+    },
+    /** The storage banner: hidden when writes are durable and in sync. */
+    setStorage(info) {
+      const bad = info.reason === 'superseded' || (info.sync && !info.sync.ok);
+      const memory = !info.persistent && !bad;
+      banner.hidden = !bad && !memory;
+      banner.className = ['storage-banner', bad && 'danger', memory && 'warn'].filter(Boolean).join(' ');
+      banner.setAttribute('role', bad ? 'alert' : 'status');
+      if (banner.hidden) { clear(banner); return; }
+      banner.replaceChildren(
+        icon('warning', { size: 14 }),
+        h('span', { class: 'storage-banner-text', text: storageLabel(info) }),
+        bad
+          ? btn(t('io.reload'), { size: 'sm', on: { click: () => window.location.reload() } })
+          : h('a', { class: 'link', href: '#/backup', text: t('nav.backup') }),
+      );
     },
     setWarnings(by) {
       const n = (by.error || 0) + (by.warning || 0);

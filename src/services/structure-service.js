@@ -1,6 +1,6 @@
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
-import { ValidationFailure } from './metric-service.js';
+import { ValidationFailure, StaleCascadeError } from './metric-service.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 
 /**
@@ -158,42 +158,64 @@ export class StructureService {
   /**
    * Delete a node. Refused while it still holds anything, unless the caller
    * asks for its contents to move to the parent. Either way the whole
-   * operation is one transaction.
+   * operation is one transaction, planned inside the repository's critical
+   * section and guarded where the data lives: a sub-node or a placement
+   * another tab added since is refused with StaleCascadeError, the mirror
+   * learns the stored records, and the one retry plans with them.
    */
   async deleteNode(id, { strategy = 'refuse', expectedToken = null } = {}) {
-    const node = this.store.get('structureNodes', id);
-    if (!node) throw new NotFoundError('structureNodes', id);
-    const children = this._siblings(id);
-    const placements = this.store.list('metricStructures').filter((l) => l.structureNodeId === id);
-    if ((children.length || placements.length) && strategy !== 'moveToParent') {
-      throw new ValidationFailure(`Node "${node.name}" still contains ${children.length} sub-node(s) and ${placements.length} metric(s)`);
-    }
-
-    const work = new UnitOfWork();
-    if (children.length) {
-      const targetSiblings = this._siblings(node.parentId, id).concat(children);
-      let order = 1;
-      for (const s of targetSiblings) {
-        const current = this.store.get('structureNodes', s.id);
-        if (!current) continue;
-        const movedHere = children.some((c) => c.id === s.id);
-        const next = { ...current, sortOrder: order, parentId: movedHere ? node.parentId : current.parentId };
-        order += 1;
-        if (next.sortOrder !== current.sortOrder || next.parentId !== current.parentId) work.save('structureNodes', next, tokenOf(current));
+    if (!this.store.has('structureNodes', id)) throw new NotFoundError('structureNodes', id);
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        await commitExclusive(this.repo, this.store, (tx) => {
+          const nodes = tx.list('structureNodes');
+          const node = nodes.find((n) => n.id === id);
+          if (!node) throw new NotFoundError('structureNodes', id);
+          const links = tx.list('metricStructures');
+          const children = nodes.filter((n) => n.parentId === id).sort((a, b) => a.sortOrder - b.sortOrder);
+          const placements = links.filter((l) => l.structureNodeId === id);
+          if ((children.length || placements.length) && strategy !== 'moveToParent') {
+            throw new ValidationFailure(`Node "${node.name}" still contains ${children.length} sub-node(s) and ${placements.length} metric(s)`);
+          }
+          const work = new UnitOfWork();
+          const handled = new Set();
+          if (children.length) {
+            const targetSiblings = nodes.filter((n) => (n.parentId || null) === (node.parentId || null) && n.id !== id).sort((a, b) => a.sortOrder - b.sortOrder).concat(children);
+            let order = 1;
+            for (const s of targetSiblings) {
+              const movedHere = children.some((c) => c.id === s.id);
+              const next = { ...s, sortOrder: order, parentId: movedHere ? node.parentId : s.parentId };
+              order += 1;
+              if (movedHere) handled.add(s.id);
+              if (next.sortOrder !== s.sortOrder || next.parentId !== s.parentId) work.save('structureNodes', next, tokenOf(s));
+            }
+          }
+          for (const link of placements) {
+            handled.add(link.id);
+            if (node.parentId) {
+              const alreadyThere = links.some((l) => l.metricId === link.metricId && l.structureNodeId === node.parentId);
+              if (alreadyThere) work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
+              else work.save('metricStructures', { ...link, structureNodeId: node.parentId }, tokenOf(link));
+            } else {
+              work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
+            }
+          }
+          work.guard('structureNodes', (stored) => {
+            for (const n of stored) if (n.parentId === id && !handled.has(n.id)) throw new StaleCascadeError('structureNodes', n.id);
+          });
+          work.guard('metricStructures', (stored) => {
+            for (const l of stored) if (l.structureNodeId === id && !handled.has(l.id)) throw new StaleCascadeError('metricStructures', l.id);
+          });
+          if (node.parentId) work.require('structureNodes', node.parentId);
+          work.remove('structureNodes', id, expectedToken == null ? tokenOf(node) : expectedToken);
+          return work;
+        });
+        return true;
+      } catch (err) {
+        if (err instanceof StaleCascadeError && attempt === 0) continue;
+        throw err;
       }
     }
-    for (const link of placements) {
-      if (node.parentId) {
-        const alreadyThere = this.store.list('metricStructures').some((l) => l.metricId === link.metricId && l.structureNodeId === node.parentId);
-        if (alreadyThere) work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
-        else work.save('metricStructures', { ...link, structureNodeId: node.parentId }, tokenOf(link));
-      } else {
-        work.remove('metricStructures', link.id, tokenOf(link), { optional: true });
-      }
-    }
-    work.remove('structureNodes', id, expectedToken == null ? tokenOf(node) : expectedToken);
-    await commit(this.repo, this.store, work);
-    return true;
   }
 
   // ------------------------------------------------------------ placements

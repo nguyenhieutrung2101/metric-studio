@@ -2,6 +2,19 @@ import { newId } from '../../utils/id.js';
 import { nowIso } from '../../utils/time.js';
 import { trimOrEmpty } from '../../utils/text.js';
 
+/**
+ * The one grammar for a scenario code, shared by the model, the master-data
+ * form, the import boundary and the formula parser: a letter, then up to
+ * seven letters, digits or underscores. `[2026:REVENUE]` would otherwise be
+ * accepted by the form and read by the parser as a metric named
+ * "2026:REVENUE".
+ */
+export const SCENARIO_CODE = /^[A-Z][A-Z0-9_]{0,7}$/;
+
+export function isValidScenarioCode(code) {
+  return SCENARIO_CODE.test(String(code || '').trim().toUpperCase());
+}
+
 export function createScenario(input = {}) {
   const ts = nowIso();
   return {

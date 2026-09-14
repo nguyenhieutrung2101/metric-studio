@@ -2,7 +2,7 @@ import { h, btn, icon, clear, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { confirmDialog, promptDialog } from '../../ui/components/confirm.js';
 import { createUnit } from '../../core/models/unit.js';
-import { createScenario } from '../../core/models/scenario.js';
+import { createScenario, isValidScenarioCode } from '../../core/models/scenario.js';
 import { tokenOf } from '../../repositories/repository.js';
 import { debounce } from '../../utils/debounce.js';
 
@@ -69,27 +69,26 @@ export function mountMasterDataView(container, ctx) {
    * to reach across, and there can be as many as the planning process needs.
    */
   async function editScenario(s) {
-    const v = await promptDialog({
+    await promptDialog({
       title: s ? t('common.edit') : t('master.addScenario'),
       confirmLabel: s ? t('common.save') : t('common.create'),
       fields: [
-        { name: 'code', label: t('master.scenarioCode'), value: s ? s.code : '', placeholder: 'TT' },
-        { name: 'name', label: t('master.scenarioName'), value: s ? s.name : '', placeholder: 'Thực tế / Actual' },
+        { name: 'code', label: t('master.scenarioCode'), value: s ? s.code : '', placeholder: 'TT', required: true },
+        { name: 'name', label: t('master.scenarioName'), value: s ? s.name : '', placeholder: 'Thực tế / Actual', required: true },
         { name: 'description', label: t('master.scenarioDescription'), value: s ? s.description || '' : '' },
       ],
+      submit: async (v) => {
+        const code = String(v.code || '').trim().toUpperCase();
+        const name = String(v.name || '').trim();
+        if (!isValidScenarioCode(code)) throw fieldError(t('master.scenarioCodeInvalid'), 'code');
+        const clash = selectors.scenarios().find((x) => x.code === code && (!s || x.id !== s.id));
+        if (clash) throw fieldError(t('master.scenarioCodeTaken', { code }), 'code');
+        const rec = s ? { ...s, code, name, description: v.description || '' } : createScenario({ code, name, description: v.description || '', sortOrder: selectors.scenarios().length + 1 });
+        const saved = await repo.saveScenario(rec, s ? tokenOf(s) : null);
+        store.upsert('scenarios', saved);
+        return saved;
+      },
     });
-    if (!v) return;
-    const code = String(v.code || '').trim().toUpperCase();
-    const name = String(v.name || '').trim();
-    if (!/^[A-Z0-9]{1,8}$/.test(code)) { ctx.toast.error(t('master.scenarioCodeInvalid')); return; }
-    if (!name) return;
-    const clash = selectors.scenarios().find((x) => x.code === code && (!s || x.id !== s.id));
-    if (clash) { ctx.toast.error(t('master.scenarioCodeTaken', { code })); return; }
-    try {
-      const rec = s ? { ...s, code, name, description: v.description || '' } : createScenario({ code, name, description: v.description || '', sortOrder: selectors.scenarios().length + 1 });
-      const saved = await repo.saveScenario(rec, s ? tokenOf(s) : null);
-      store.upsert('scenarios', saved);
-    } catch (err) { ctx.toast.error(err.message); }
   }
 
   async function deleteScenario(s) {
@@ -101,13 +100,17 @@ export function mountMasterDataView(container, ctx) {
   }
 
   async function editUnit(u) {
-    const v = await promptDialog({ title: u ? t('common.edit') : t('master.addUnit'), confirmLabel: u ? t('common.save') : t('common.create'), fields: [{ name: 'code', label: t('mm.col.code'), value: u ? u.code : '' }, { name: 'name', label: t('mm.col.name'), value: u ? u.name : '' }] });
-    if (!v || !v.code) return;
-    try {
-      const rec = u ? { ...u, ...v } : createUnit(v);
-      const saved = await repo.saveUnit(rec, u ? tokenOf(u) : null);
-      store.upsert('units', saved);
-    } catch (err) { ctx.toast.error(err.message); }
+    await promptDialog({
+      title: u ? t('common.edit') : t('master.addUnit'),
+      confirmLabel: u ? t('common.save') : t('common.create'),
+      fields: [{ name: 'code', label: t('mm.col.code'), value: u ? u.code : '', required: true }, { name: 'name', label: t('mm.col.name'), value: u ? u.name : '' }],
+      submit: async (v) => {
+        const rec = u ? { ...u, ...v } : createUnit(v);
+        const saved = await repo.saveUnit(rec, u ? tokenOf(u) : null);
+        store.upsert('units', saved);
+        return saved;
+      },
+    });
   }
 
   async function deleteUnit(u) {
@@ -122,4 +125,11 @@ export function mountMasterDataView(container, ctx) {
   renderUnits();
   renderScenarios();
   return { update() {}, onDrawerClosed() {}, onMetricOpened() {}, destroy() { offStore(); schedule.cancel(); root.remove(); } };
+}
+
+/** An error the dialog can pin to one field. */
+function fieldError(message, field) {
+  const err = new Error(message);
+  err.field = field;
+  return err;
 }

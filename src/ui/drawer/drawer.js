@@ -63,6 +63,10 @@ export function createDrawer(host) {
         document.activeElement.blur();
         return;
       }
+      // Closing may open the "unsaved changes" dialog synchronously; without
+      // this, the same Escape's default action would cancel that dialog
+      // before anyone saw it.
+      e.preventDefault();
       close();
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S')) {

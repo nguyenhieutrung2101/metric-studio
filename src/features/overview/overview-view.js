@@ -21,7 +21,7 @@ export function mountOverviewView(container, ctx) {
   const header = pageHeader({
     title: t('nav.overview'),
     subtitle: t('overview.subtitle'),
-    meta: h('span', { class: 'muted small', text: `${t('overview.storage')}: ${ctx.repoInfo.persistent ? t('io.storagePersistent') : t('io.storageMemory')}` }),
+    meta: h('span', { class: 'muted small', text: `${t('overview.storage')}: ${ctx.storage.label()}` }),
     actions: [btn(t('overview.action.newMetric'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => go('metrics', { new: 1 }) } })],
   });
   const grid = h('div', { class: 'ov-grid' });
@@ -124,6 +124,7 @@ export function mountOverviewView(container, ctx) {
   const schedule = debounce(render, 60);
   const offStore = store.events.on('change', () => schedule());
   const offValidation = ctx.validation.onChange(() => schedule());
+  const offStorage = ctx.storage.onChange(() => { header.setMeta(h('span', { class: 'muted small', text: `${t('overview.storage')}: ${ctx.storage.label()}` })); });
   render();
 
   return {
@@ -131,6 +132,6 @@ export function mountOverviewView(container, ctx) {
     onShow() { schedule(); },
     onDrawerClosed() {},
     onMetricOpened() {},
-    destroy() { offStore(); offValidation(); schedule.cancel(); el.remove(); },
+    destroy() { offStore(); offValidation(); offStorage(); schedule.cancel(); el.remove(); },
   };
 }

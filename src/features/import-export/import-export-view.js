@@ -14,15 +14,23 @@ import { formatDateTime } from '../../utils/time.js';
  * incoming snapshot and writes a restore point first.
  */
 export function mountImportExportView(container, ctx) {
-  const { store, services, repoInfo } = ctx;
+  const { store, services } = ctx;
   const preview = h('div', { class: 'import-preview', hidden: true });
   const fileInput = h('input', { type: 'file', accept: '.json,application/json', hidden: true });
   const restoreList = h('div', { class: 'restore-list' });
   let pending = null;
 
+  const storageLine = h('p', { class: 'small' });
+  const renderStorage = () => {
+    const info = ctx.storage.info;
+    const ok = info.persistent && info.sync.ok && info.writable !== false;
+    storageLine.replaceChildren(icon(ok ? 'check' : 'warning', { size: 14 }), ' ', ctx.storage.label());
+  };
+  renderStorage();
+  const offStorage = ctx.storage.onChange(renderStorage);
   const storageCard = h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', { text: t('io.storage') })),
-    h('p', { class: 'small' }, icon(repoInfo.persistent ? 'check' : 'warning', { size: 14 }), ' ', repoInfo.persistent ? t('io.storagePersistent') : t('io.storageMemory')),
+    storageLine,
     h('div', { class: 'counts' }),
   );
 
@@ -30,8 +38,9 @@ export function mountImportExportView(container, ctx) {
     h('div', { class: 'card-head' }, h('h2', { text: t('io.export') })),
     h('p', { class: 'small muted', text: t('io.exportHint') }),
     btn(t('io.downloadJson'), { kind: 'primary', size: 'sm', icon: 'download', on: { click: exportJson } }),
-    btn(t('io.downloadBindingsCsv'), { size: 'sm', icon: 'download', title: t('io.bindingsCsvHint'), on: { click: () => downloadCsv('bindings', toCsv(bindingRows(store), BINDING_COLUMNS)) } }),
-    btn(t('io.downloadEdgesCsv'), { size: 'sm', icon: 'download', title: t('io.edgesCsvHint'), on: { click: () => downloadCsv('dependency-edges', toCsv(services.dependencies.edgeRows(), EDGE_COLUMNS)) } }),
+    btn(t('io.downloadBindingsCsv'), { size: 'sm', icon: 'download', title: t('io.bindingsCsvHint'), on: { click: () => downloadCsv('bindings', toCsv(bindingRows(store), BINDING_COLUMNS, { spreadsheetSafe: true })) } }),
+    btn(t('io.downloadEdgesCsv'), { size: 'sm', icon: 'download', title: t('io.edgesCsvHint'), on: { click: () => downloadCsv('dependency-edges', toCsv(services.dependencies.referenceRows(), EDGE_COLUMNS, { spreadsheetSafe: true })) } }),
+    h('p', { class: 'small muted', text: t('io.csvSafeHint') }),
   );
 
   const importCard = h('div', { class: 'card' },
@@ -248,7 +257,7 @@ export function mountImportExportView(container, ctx) {
     update() {},
     onDrawerClosed() {},
     onMetricOpened() {},
-    destroy() {
+    destroy() { offStorage();
       offStore();
       root.remove();
     },
