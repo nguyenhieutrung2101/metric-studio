@@ -434,7 +434,27 @@ span.stat { cursor: default; }
 
 /* ---------- dialog ---------- */
 .dialog { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 0; box-shadow: var(--shadow-2); width: min(440px, calc(100vw - 32px)); color: var(--text); animation: pop var(--dur-slow) var(--ease); }
-.dialog::backdrop { background: rgba(28, 33, 40, 0.35); }
+.dialog::backdrop { background: rgba(28, 33, 40, 0.32); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+/* What's new */
+.dialog-whats-new { width: min(600px, calc(100vw - 32px)); }
+.wn-head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
+.wn-logo { color: var(--accent); margin-top: 3px; flex: none; }
+.wn-head .dialog-title { margin-bottom: 2px; }
+.wn-head .dialog-msg { margin-bottom: 0; }
+.wn-body { max-height: min(56vh, 520px); overflow: auto; margin: 0 -20px; padding: 0 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.wn-release { border-bottom: 1px solid var(--border); }
+.wn-release:last-child { border-bottom: none; }
+.wn-summary { display: flex; align-items: baseline; gap: 10px; padding: 12px 0; cursor: pointer; list-style: none; }
+.wn-summary::-webkit-details-marker { display: none; }
+.wn-summary::before { content: "▸"; color: var(--text-3); font-size: 11px; flex: none; transition: transform var(--dur) var(--ease); }
+.wn-release[open] > .wn-summary::before { transform: rotate(90deg); }
+.wn-version { flex: none; font-size: var(--fs-xs); font-weight: 600; color: var(--accent); background: var(--accent-soft); padding: 1px 6px; border-radius: 4px; }
+.wn-title { flex: 1; min-width: 0; font-weight: 600; }
+.wn-date { flex: none; font-size: var(--fs-xs); }
+.wn-items { list-style: none; margin: 0 0 12px; padding: 0 0 0 4px; display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-sm); line-height: 1.5; }
+.wn-items li { display: flex; gap: 8px; align-items: flex-start; }
+.wn-items .icon { color: var(--success); flex: none; margin-top: 3px; }
+.wn-foot { margin-right: auto; }
 @keyframes pop { from { opacity: 0; transform: scale(0.96); } }
 .dialog-body { padding: 18px 20px 16px; }
 .dialog-title { font-size: 15px; margin-bottom: 8px; }

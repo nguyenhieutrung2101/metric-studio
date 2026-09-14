@@ -1,6 +1,6 @@
 {
   "name": "metric-studio",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Data planning / metric governance workspace: Metric Master, Structural Hierarchy, TT/GD scenario bindings, dimensions and dependency graph.",
   "private": true,
   "type": "module",

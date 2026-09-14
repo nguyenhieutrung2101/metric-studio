@@ -157,12 +157,14 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
    three-pane body with a collapsible, resizable insights panel.
    ================================================================ */
 .ws { flex: 1; min-height: 0; min-width: 0; display: flex; flex-direction: column; background: var(--surface); }
-.page-header { flex: none; display: flex; align-items: center; gap: 12px; min-height: 44px; padding: 6px 14px; border-bottom: 1px solid var(--border); }
+/* Title, subtitle and meta share one baseline; only the action buttons are centred on the row. */
+.page-header { flex: none; display: flex; align-items: baseline; gap: 12px; min-height: 44px; padding: 8px 14px 7px; border-bottom: 1px solid var(--border); }
 .page-heading { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 .page-title { font-size: var(--fs-page-title); font-weight: 600; letter-spacing: -0.01em; white-space: nowrap; }
 .page-subtitle { color: var(--text-2); font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.page-meta { display: flex; align-items: center; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); min-width: 0; }
-.page-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.page-meta { display: flex; align-items: baseline; gap: 8px; color: var(--text-2); font-size: var(--fs-sm); min-width: 0; white-space: nowrap; }
+.page-meta .count-label { margin-left: 0; }
+.page-actions { margin-left: auto; align-self: center; display: flex; align-items: center; gap: 6px; }
 
 .context-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: var(--surface-2); flex-wrap: wrap; }
 .ctx { position: relative; }

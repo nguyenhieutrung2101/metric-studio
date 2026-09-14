@@ -21,6 +21,7 @@ import { debounce } from './utils/debounce.js';
 import { DENSITIES, getDensity, setDensity, applyDensity } from './ui/density.js';
 import { NAV_GROUPS, UTILITY_PAGES, HOME_PAGE, groupOf, groupLabel, pageLabel, resolvePage } from './ui/nav/registry.js';
 import { disclosureNav, closeAll as closeNavs } from './ui/nav/disclosure.js';
+import { showWhatsNew, hasUnseenChanges } from './features/whats-new/whats-new.js';
 import { MetricDrawer } from './features/metric-master/metric-drawer.js';
 import { mountMetricMasterView } from './features/metric-master/metric-master-view.js';
 import { mountOverviewView } from './features/overview/overview-view.js';
@@ -208,6 +209,8 @@ export async function start(rootEl) {
       // way of leaving an editor with unsaved changes.
       ...LANGUAGES.map((l) => ({ label: l.label, active: getLanguage() === l.code, onClick: () => metricDrawer.guardThen(() => setLanguage(l.code)) })),
       { separator: true },
+      { label: t('nav.whatsNew'), icon: 'info', onClick: () => showWhatsNew() },
+      { separator: true },
       { heading: storageLabel(storage.info) },
     ]);
   });
@@ -251,6 +254,9 @@ export async function start(rootEl) {
 
   validation.run();
   router.start();
+  // Once per build: what changed, over a softly blurred workspace. Not on a
+  // deep link into an editor, where the person came to do something.
+  if (hasUnseenChanges() && !router.current.params.metric) setTimeout(() => showWhatsNew(), 350);
   globalThis.__metricStudio = { ...ctx, metricDrawer }; // debugging / automation hook, no behaviour depends on it
   return ctx;
 }
