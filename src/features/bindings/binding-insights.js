@@ -29,7 +29,7 @@ export function renderBindingInsights(ctx, metricId, scenarioId, { onEdit, onDep
 
   const head = h('div', { class: 'insight-head' },
     h('div', { class: 'insight-title', text: m.name }),
-    h('div', { class: 'insight-sub' }, h('span', { class: 'mono', text: m.code }), bindingChip(s.code, type), type && b.status && h('span', { class: 'tag', text: t(`binding.status.${b.status}`) })),
+    h('div', { class: 'insight-sub' }, h('span', { class: 'mono', text: m.code }), bindingChip(s.code, type), type && b.status && h('span', { class: 'tag', text: t(`binding.status.${b.status}`) }), type === 'formula' && b.formulaMode === 'text' && h('span', { class: 'tag tag-freetext', text: t('binding.freeText') })),
   );
 
   let body;
@@ -37,6 +37,7 @@ export function renderBindingInsights(ctx, metricId, scenarioId, { onEdit, onDep
     body = insightSection(t('drawer.section.bindings'), h('p', { class: 'insight-para muted', text: t('bindings.noBinding', { scenario: s.name || s.code }) }));
   } else if (type === 'formula') {
     body = insightSection(t('binding.formula'),
+      b.formulaMode === 'text' && h('p', { class: 'insight-para insight-warn', text: t('binding.freeTextInsight') }),
       formulaView(b, onReference),
       b.formulaErrors && b.formulaErrors.length ? h('ul', { class: 'insight-list' }, b.formulaErrors.slice(0, 3).map((e) => h('li', null, severityDot('error'), h('span', { class: 'ellipsis', text: e.message || String(e), title: e.message || String(e) })))) : null,
       referencesList(ctx, b, onReference),

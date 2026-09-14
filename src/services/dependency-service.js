@@ -90,7 +90,7 @@ export class DependencyService {
       // these to whoever builds execution order or lineage outside the app.
       let placement;
       try {
-        placement = referencePlacement(b.formulaText);
+        placement = referencePlacement(b.formulaText, b.formulaMode);
       } catch (err) {
         errors.push({ bindingId: b.id, metricId: b.metricId, scenarioId: b.scenarioId, message: err && err.message ? err.message : String(err) });
         continue;
@@ -128,6 +128,7 @@ export class DependencyService {
           sequence: seq,
           operator: where.operator,
           formulaText: b.formulaText,
+          formulaMode: b.formulaMode || 'expression',
         };
         byTarget.set(to, edge);
         edges.push(edge);
@@ -198,7 +199,7 @@ export class DependencyService {
       const from = nodeKey(b.metricId, b.scenarioId);
       let occurrences;
       try {
-        occurrences = formulaOccurrences(b.formulaText, b.parsedReferences || []);
+        occurrences = formulaOccurrences(b.formulaText, b.parsedReferences || [], b.formulaMode);
       } catch {
         continue; // reported by graphErrors()
       }
@@ -235,6 +236,7 @@ export class DependencyService {
           token: ref.token,
           raw: ref.raw || `[${ref.token}]`,
           formulaText: b.formulaText,
+          formulaMode: b.formulaMode || 'expression',
         });
       }
     }
@@ -277,6 +279,7 @@ export class DependencyService {
         resolved: e.resolved,
         token: e.token,
         formulaText: e.formulaText,
+        formulaMode: e.formulaMode || 'expression',
       });
     }
     rows.sort((a, b) => a.targetScenario.localeCompare(b.targetScenario) || a.targetCode.localeCompare(b.targetCode) || a.sequence - b.sequence);
@@ -593,11 +596,11 @@ export class DependencyService {
  * occurrence wins; groups are transparent. Iterative: see
  * astReferenceOccurrences.
  */
-function referencePlacement(formulaText) {
+function referencePlacement(formulaText, mode) {
   const out = new Map();
   const text = formulaText || '';
   if (text.length > FORMULA_LIMITS.maxLength) throw new Error(`Formula is too long (${text.length} characters; the limit is ${FORMULA_LIMITS.maxLength})`);
-  const { ast } = parseFormula(text);
+  const { ast } = parseFormula(text, { mode });
   for (const occ of astReferenceOccurrences(ast)) {
     const key = referenceIdentity(occ.node);
     if (!out.has(key)) out.set(key, { operator: occ.operator });
@@ -612,7 +615,7 @@ function referencePlacement(formulaText) {
  * unknown — the row still exists, so the table never silently drops a
  * dependency the graph knows about.
  */
-function formulaOccurrences(formulaText, parsedReferences) {
+function formulaOccurrences(formulaText, parsedReferences, mode) {
   const text = formulaText || '';
   if (text.length > FORMULA_LIMITS.maxLength) throw new Error('Formula is too long');
   const cache = new Map();
@@ -620,7 +623,7 @@ function formulaOccurrences(formulaText, parsedReferences) {
     const key = referenceIdentity(r);
     if (!cache.has(key)) cache.set(key, r);
   }
-  const { ast } = parseFormula(text);
+  const { ast } = parseFormula(text, { mode });
   if (!ast) return parsedReferences.map((ref) => ({ ref, operator: '', path: '' }));
   const out = [];
   for (const occ of astReferenceOccurrences(ast)) {

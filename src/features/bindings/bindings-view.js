@@ -2,7 +2,7 @@ import { h, btn, icon, formatNumber } from '../../ui/dom.js';
 import { t } from '../../ui/i18n.js';
 import { VirtualList } from '../../ui/table/virtual-list.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
-import { BINDING_TYPES } from '../../core/models/binding.js';
+import { BINDING_TYPES, isFreeTextFormula } from '../../core/models/binding.js';
 import { debounce } from '../../utils/debounce.js';
 import { compareText } from '../../utils/text.js';
 import { worstSeverity } from '../../services/validation-service.js';
@@ -108,12 +108,14 @@ export function mountBindingsView(container, ctx) {
   const FILTER_SPEC = Object.fromEntries([
     ...allScenarios.map((s) => [`type:${s.id}`, { param: `t_${s.code}` }]),
     ['warningsOnly', { type: 'toggle', param: 'warn' }],
+    ['freeText', { type: 'toggle', param: 'text' }],
   ]);
   const filters = filterBar({
     search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; ctx.router.setParams({ q: q || null }); refresh({ keepScroll: false }); }, onEnter: () => { if (state.items.length) selectCell(state.items[0].id, state.scenarioId); } },
     filters: [
       ...allScenarios.map((s) => ({ key: `type:${s.id}`, label: t('bindings.typeFilter', { scenario: s.code }), options: BINDING_TYPES.filter((x) => x !== 'none').map((x) => ({ value: x, label: t(`binding.type.${x}`) })) })),
       { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
+      { key: 'freeText', label: t('mm.filter.freeText'), type: 'toggle' },
     ],
     extra: [coverageSeg],
     onChange: (values) => { state.filters = values; writeFilters(ctx.router, values, FILTER_SPEC); refresh({ keepScroll: false }); },
@@ -199,6 +201,7 @@ export function mountBindingsView(container, ctx) {
       ...cols.map((s) => {
         const b = bindings.get(s.id);
         const detail = b && cov[s.id] ? (b.type === 'formula' ? b.formulaText : b.type === 'source' ? [b.source.system, b.source.dataset].filter(Boolean).join(' / ') : b.assumption.value) : '';
+        const freeText = isFreeTextFormula(b);
         return h('span', {
           class: ['bcell', m.id === state.selectedId && s.id === state.scenarioId && 'selected'],
           dataset: { scenario: s.id },
@@ -206,7 +209,7 @@ export function mountBindingsView(container, ctx) {
             click: (e) => { e.stopPropagation(); selectCell(m.id, s.id); },
             dblclick: (e) => { e.stopPropagation(); open(m.id, s.id); },
           },
-        }, bindingChip(s.code, cov[s.id]), detail && h('span', { class: 'binding-detail mono', text: detail, title: detail }));
+        }, bindingChip(s.code, cov[s.id]), freeText && h('span', { class: 'tag tag-freetext', text: t('binding.freeTextTag'), title: t('binding.freeText') }), detail && h('span', { class: ['binding-detail', !freeText && 'mono'], text: detail, title: detail }));
       }),
       h('span', { class: 'col-legacy mono muted', text: legacy.join(' · '), title: legacy.join(' · ') }),
       h('span', { class: 'col-warn' }, sev ? severityDot(sev, issues.length) : null),
@@ -227,6 +230,7 @@ export function mountBindingsView(container, ctx) {
       for (const s of allScenarios) if (f[`type:${s.id}`] && cov[s.id] !== f[`type:${s.id}`]) ok = false;
       if (!ok) continue;
       if (f.warningsOnly && !ctx.validation.issuesForMetric(m.id).some((i) => i.entity.type === 'binding' || i.scenarioId)) continue;
+      if (f.freeText && !ids.some((id) => isFreeTextFormula(selectors.bindingsByMetric(m.id).get(id)))) continue;
       const level = selectors.coverageLevel(m.id, ids);
       counts[''] += 1;
       counts[level] += 1;

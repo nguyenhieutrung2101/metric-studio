@@ -6,6 +6,7 @@ import { openMenu } from '../../ui/components/menu.js';
 import { promptDialog } from '../../ui/components/confirm.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
 import { METRIC_STATUSES } from '../../core/models/metric.js';
+import { isFreeTextFormula } from '../../core/models/binding.js';
 import { debounce } from '../../utils/debounce.js';
 import { compareText } from '../../utils/text.js';
 import { getPreference, setPreference } from '../../utils/preferences.js';
@@ -62,7 +63,7 @@ export function mountMetricMasterView(container, ctx) {
   // ---------------------------------------------------------------- filters
   // Every filter has a place in the URL, so a remembered route, a bookmark
   // and a drill-through from elsewhere all mean the same rows.
-  const FILTER_SPEC = { status: {}, coverage: {}, unitId: { param: 'unit' }, dimensionId: { param: 'dimension' }, warningsOnly: { type: 'toggle', param: 'warn' }, direct: { type: 'toggle' } };
+  const FILTER_SPEC = { status: {}, coverage: {}, unitId: { param: 'unit' }, dimensionId: { param: 'dimension' }, warningsOnly: { type: 'toggle', param: 'warn' }, direct: { type: 'toggle' }, freeText: { type: 'toggle', param: 'text' } };
   const filters = filterBar({
     search: { placeholder: t('mm.searchPlaceholder'), onChange: (q) => { state.query = q; ctx.router.setParams({ q: q || null }); refreshList({ keepScroll: false }); }, onEnter: () => { if (state.items.length) select(state.items[0].id); } },
     filters: [
@@ -71,6 +72,7 @@ export function mountMetricMasterView(container, ctx) {
       { key: 'unitId', label: t('metric.field.unit'), options: () => selectors.units().map((u) => ({ value: u.id, label: u.code })) },
       { key: 'dimensionId', label: t('mm.filter.dimension'), options: () => selectors.dimensionsSorted().map((d) => ({ value: d.id, label: `${d.code} ${d.name}` })) },
       { key: 'warningsOnly', label: t('mm.filter.warningsOnly'), type: 'toggle' },
+      { key: 'freeText', label: t('mm.filter.freeText'), type: 'toggle' },
       { key: 'direct', label: t('mm.filter.direct'), type: 'toggle' },
     ],
     onChange: (values) => { state.filters = values; writeFilters(ctx.router, values, FILTER_SPEC); refreshList({ keepScroll: false }); },
@@ -311,6 +313,7 @@ export function mountMetricMasterView(container, ctx) {
       if (f.coverage && selectors.coverageLevel(m.id) !== f.coverage) continue;
       if (f.dimensionId && !selectors.metricDimensions(m.id).some((l) => l.dimensionId === f.dimensionId)) continue;
       if (f.warningsOnly && ctx.validation.issuesForMetric(m.id).length === 0) continue;
+      if (f.freeText && ![...selectors.bindingsByMetric(m.id).values()].some(isFreeTextFormula)) continue;
       items.push(m);
     }
     const { key, dir } = state.sort;

@@ -224,6 +224,9 @@ export function buildDemoSnapshot() {
   asm('m-trips-per-vehicle', GD, '18', 'Chuẩn năng suất SOP đội xe');
   asm('m-trip-capacity', TT, '24', 'SOP vận hành đội xe v3');
   fx('m-vehicle-utilization', TT, '[TRIPS_PER_VEHICLE] / [TRIP_CAPACITY]');
+  // The rare formula that is a description, not an expression: allowed,
+  // declared in brackets, and always reported as a warning.
+  fx('m-vehicle-utilization', GD, 'Theo bảng năng suất SOP v3: [TRIPS_PER_VEHICLE] so với [TT:TRIP_CAPACITY], điều chỉnh theo mùa vụ (phụ lục 2)', { formulaMode: 'text', status: 'draft', note: 'Công thức dạng mô tả — chỉ dùng khi không viết được thành biểu thức.' });
   src('m-complaints', TT, 'CRM', 'tickets', 'complaint_count', { legacyCode: 'TT-CL005' });
   fx('m-complaint-rate', TT, '[COMPLAINTS] / [VOLUME] * 1000');
   src('m-driver-headcount', TT, 'HRM', 'drivers', 'headcount');
@@ -262,7 +265,7 @@ export function resolveSeedBindings(snapshot, rawBindings) {
   return rawBindings.map((b) => {
     const binding = createBinding({ ...b, id: b.id || `b-${b.metricId}-${b.scenarioId}` });
     if (binding.type === BindingType.FORMULA) {
-      const res = resolveFormula(binding.formulaText, binding.scenarioId, selectors, store);
+      const res = resolveFormula(binding.formulaText, binding.scenarioId, selectors, store, { mode: binding.formulaMode });
       binding.parsedReferences = res.references.map(({ raw, token, scenarioCode, dimensionContext, metricId, scenarioId, status }) => ({ raw, token, scenarioCode, dimensionContext, metricId, scenarioId, status }));
       binding.formulaErrors = res.errors.map((e) => ({ message: e.message, position: e.position }));
     }

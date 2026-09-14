@@ -77,6 +77,15 @@ nothing is flagged with suggestions and an explicit **Create draft metric**
 action that asks for a structure group; the app never invents metrics from a
 typo. Ambiguous matches are errors, not guesses.
 
+The rare formula that cannot be written as an expression can be marked
+**Free-text formula** — a description in words ("weighted by the SOP v3
+table from [VOLUME] and [PRICE]"). It is allowed and never a syntax error,
+but it is never checked or executable either, so it is always reported as a
+warning (`BINDING_FORMULA_FREE_TEXT`) and the inputs written in brackets are
+the declared dependencies. *Free-text formulas only* in the Bindings and
+Metric Master filters, the `text` badge on a cell and the rule filter in
+Quality find every one of them; every export carries `Formula_Mode`.
+
 ## Dependencies as a table
 
 The Dependencies view has a **Table** mode next to the graph: one row per
@@ -124,6 +133,20 @@ drawer shows what changed and offers *Reload latest* or an explicit
   its bindings, placements and dimension links with it, or changes nothing at
   all. The same holds for deleting a structure group, a dimension, and for
   import.
+* **Excel is a first-class way in and out.** *Import from Excel* offers a
+  template — blank, or filled with the current catalogue — with one sheet per
+  kind of record (Units, Scenarios, Structure, Metrics, Bindings, Dimensions,
+  Members, Metric_Dimensions), a hint row and shaded example rows that the
+  importer skips. Codes are the keys: a row whose code exists updates that
+  record, the rest are created, blank cells keep the current value and a
+  single dash clears it. The preview lists what will be created, updated and
+  removed and names every row that cannot be applied (sheet and row number);
+  nothing is imported until the file is clean, and the plan goes through the
+  same schema boundary and restore point as a JSON backup. *Export to Excel*
+  lets you pick datasets and fields and writes a formatted workbook — cover
+  sheet, frozen headers, filters, zebra rows — in the app's own theme.
+  Workbooks are written and read by the app itself; there is still no runtime
+  dependency.
 * **Imports are validated before anything is touched.** A file missing a whole
   collection that its own records reference is refused. Orphans, duplicates
   and broken hierarchies inside an otherwise sound file are repaired, and the
@@ -216,6 +239,8 @@ css/                  tokens, shell layout, components
 src/core/             models, store, selectors
 src/repositories/     contract + Memory / IndexedDB adapters, SharePoint skeleton
 src/services/         formula parser, dependency graph, validation, schema boundary, unit of work, CRUD services, backup
+src/services/xlsx.js  .xlsx writer/reader (themed styles) · excel-template.js, excel-import.js, excel-export.js
+src/utils/zip.js      the ZIP container an .xlsx is · src/utils/xml.js  a small tolerant XML parser
 src/features/         overview, metric-master, structure, bindings, dependency, dimensions, quality, master-data, import-export
 src/ui/               dom helpers, i18n, router, density, drawer, virtual list, tree, graph, toast, components
 src/ui/nav/           navigation registry (groups, pages, aliases) + disclosure navigation

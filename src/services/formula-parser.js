@@ -164,8 +164,16 @@ export function formatReference({ token, scenarioCode = null, dimensionContext =
 /**
  * Full parse. Always returns references (from tokens) and errors; `ast` is
  * null when the expression is not well formed.
+ *
+ * `mode: 'text'` reads the formula as a description in words rather than an
+ * expression: nothing is a syntax error, there is no AST, and the only thing
+ * extracted is every well-formed `[reference]` in it — what the description
+ * declares it consists of. The result has the same shape, so every consumer
+ * of a parse (resolution, validation, the graph, the editor's highlighting)
+ * handles both kinds of formula through one call.
  */
-export function parseFormula(text) {
+export function parseFormula(text, { mode = 'expression' } = {}) {
+  if (mode === 'text') return parseFreeText(text);
   const { tokens, errors } = tokenize(text);
   const references = tokens
     .filter((t) => t.type === 'reference')
@@ -198,9 +206,28 @@ export function parseFormula(text) {
   return { ok: !isEmpty && errors.length === 0 && ast !== null, isEmpty, ast, references, errors, tokens };
 }
 
+/**
+ * A free-text formula: references are whatever sits between a `[` and the
+ * next `]`, everything else is prose. An unclosed bracket is prose too, not
+ * an error — the text is not held to the grammar.
+ */
+export function parseFreeText(text) {
+  const src = String(text ?? '');
+  const references = [];
+  const re = /\[([^\[\]]*)\]/g;
+  let m;
+  while ((m = re.exec(src))) {
+    const ref = parseReferenceBody(m[1]);
+    if (!ref.token) continue;
+    references.push({ raw: m[0], token: ref.token, scenarioCode: ref.scenarioCode, dimensionContext: ref.dimensionContext, start: m.index, end: m.index + m[0].length });
+  }
+  const isEmpty = src.trim().length === 0;
+  return { ok: !isEmpty, isEmpty, ast: null, references, errors: [], tokens: [], mode: 'text' };
+}
+
 /** Convenience: references only. */
-export function extractReferences(text) {
-  return parseFormula(text).references;
+export function extractReferences(text, options) {
+  return parseFormula(text, options).references;
 }
 
 /**

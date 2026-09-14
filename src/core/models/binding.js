@@ -11,6 +11,21 @@ export const BindingType = Object.freeze({
 export const BINDING_TYPES = Object.values(BindingType);
 
 export const BindingStatus = Object.freeze({ DRAFT: 'draft', APPROVED: 'approved' });
+
+/**
+ * How a formula binding's text is to be read.
+ *
+ *   expression  the grammar the parser checks: references, arithmetic, calls.
+ *               Anything it cannot parse is a syntax error.
+ *   text        a description in words — the rare formula that does not fit
+ *               the grammar ("weighted by the SOP v3 table, see appendix").
+ *               Never a syntax error, never executable, always reported as
+ *               a warning so it stays rare and visible. References written
+ *               in brackets are still extracted, so the dependency graph
+ *               knows what the description says it consists of.
+ */
+export const FormulaMode = Object.freeze({ EXPRESSION: 'expression', TEXT: 'text' });
+export const FORMULA_MODES = Object.values(FormulaMode);
 export const BINDING_STATUSES = Object.values(BindingStatus);
 
 export function createSourceInfo(input = {}) {
@@ -98,6 +113,7 @@ export function createBinding(input = {}) {
     legacyCode: trimOrEmpty(input.legacyCode),
     source: createSourceInfo(input.source),
     formulaText: trimOrEmpty(input.formulaText),
+    formulaMode: input.formulaMode === FormulaMode.TEXT ? FormulaMode.TEXT : FormulaMode.EXPRESSION,
     parsedReferences: sanitizeParsedReferences(input.parsedReferences),
     formulaErrors: sanitizeFormulaErrors(input.formulaErrors),
     assumption: createAssumptionInfo(input.assumption),
@@ -107,6 +123,11 @@ export function createBinding(input = {}) {
     updatedAt: input.updatedAt || ts,
     version: Number.isInteger(input.version) ? input.version : 0,
   };
+}
+
+/** A formula binding whose text is a description in words, not an expression. */
+export function isFreeTextFormula(b) {
+  return !!b && b.type === BindingType.FORMULA && b.formulaMode === FormulaMode.TEXT;
 }
 
 /** Key of the graph node a binding represents. */

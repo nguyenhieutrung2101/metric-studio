@@ -1,4 +1,4 @@
-import { BindingType } from '../core/models/binding.js';
+import { BindingType, FormulaMode } from '../core/models/binding.js';
 import { MetricStatus } from '../core/models/metric.js';
 import { nodeKey } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
@@ -118,8 +118,18 @@ function validateBindings(store, selectors, add) {
         add(Severity.ERROR, 'BINDING_FORMULA_EMPTY', entity, `${label}: formula binding without a formula`, { ...base, params });
         continue;
       }
-      for (const e of b.formulaErrors || []) {
-        add(Severity.ERROR, 'BINDING_FORMULA_SYNTAX', entity, `${label}: ${e.message}`, { ...base, params: { ...params, detail: e.message }, suffix: String(e.position) });
+      if (b.formulaMode === FormulaMode.TEXT) {
+        // A description in words is allowed, never executable and never
+        // silent: the warning is how the rare case stays rare and findable.
+        const declared = distinctReferenceCount(b.parsedReferences || []);
+        add(Severity.WARNING, 'BINDING_FORMULA_FREE_TEXT', entity, declared
+          ? `${label}: free-text formula (${declared} declared reference${declared === 1 ? '' : 's'}) — not checked, not executable`
+          : `${label}: free-text formula that declares no metric reference — write its inputs in brackets so its dependencies are known`,
+        { ...base, params: { ...params, count: declared } });
+      } else {
+        for (const e of b.formulaErrors || []) {
+          add(Severity.ERROR, 'BINDING_FORMULA_SYNTAX', entity, `${label}: ${e.message}`, { ...base, params: { ...params, detail: e.message }, suffix: String(e.position) });
+        }
       }
       const seen = new Set();
       for (const r of b.parsedReferences || []) {
@@ -265,6 +275,12 @@ function validateDependencies(store, selectors, dependencies, add) {
     const entity = info.binding ? { type: 'binding', id: info.binding.id } : { type: 'metric', id: info.metricId };
     add(Severity.ERROR, 'DEPENDENCY_CYCLE', entity, `Circular dependency: ${names.join(' → ')} → ${names[0]}`, { metricId: info.metricId, scenarioId: info.scenarioId, params: { path: names.join(' → '), count: cycle.length }, cycle, suffix: cycle.join(',') });
   }
+}
+
+function distinctReferenceCount(references) {
+  const seen = new Set();
+  for (const r of references) seen.add(referenceIdentity(r));
+  return seen.size;
 }
 
 /** Group issues for quick lookups in the UI. */

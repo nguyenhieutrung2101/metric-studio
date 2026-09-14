@@ -214,7 +214,7 @@ export function parseSnapshot(input) {
     const dropped = cachedCount - b.parsedReferences.length;
     if (dropped > 0) addRepair('REFERENCE_DROPPED', 'Formula reference that was not usable: dropped', dropped);
 
-    const parsed = parseFormula(b.formulaText);
+    const parsed = parseFormula(b.formulaText, { mode: b.formulaMode });
     // Syntax errors are a fact about the text, never about the cache: a
     // broken formula must arrive flagged even when its cache said nothing.
     b.formulaErrors = parsed.errors.map((e) => ({ message: e.message, position: e.position }));

@@ -394,6 +394,15 @@ span.stat { cursor: default; }
 .ref-msg { color: var(--danger); font-size: var(--fs-xs); }
 .ref-actions { display: flex; gap: 6px; flex-wrap: wrap; width: 100%; }
 .ref-error { display: flex; align-items: center; gap: 6px; color: var(--danger); font-size: var(--fs-sm); margin: 2px 0 6px; }
+.ref-notice { display: flex; align-items: center; gap: 6px; color: var(--warning); background: var(--warning-soft); border-radius: var(--radius); padding: 6px 8px; font-size: var(--fs-sm); margin: 2px 0 6px; }
+.ref-switch { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; }
+.formula-mode { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--text-2); cursor: pointer; white-space: nowrap; }
+.formula-mode input { margin: 0; }
+.formula-mode.on { color: var(--warning); font-weight: 500; }
+.formula-editor-text .formula-input, .formula-editor-text .formula-backdrop { font-family: var(--font); }
+.formula-editor-text .formula-input { border-color: rgba(179, 89, 0, 0.45); }
+.tag-freetext { background: var(--warning-soft); color: var(--warning); }
+.insight-para.insight-warn { color: var(--warning); }
 .formula-pre { margin: 0 0 8px; padding: 8px 10px; border-radius: var(--radius); background: var(--surface-2); font-family: var(--mono); font-size: var(--fs-sm); white-space: pre-wrap; word-break: break-word; }
 
 .meta-list { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: var(--fs-sm); margin: 6px 0 12px; }
@@ -456,6 +465,31 @@ span.stat { cursor: default; }
 .wn-items .icon { color: var(--success); flex: none; margin-top: 3px; }
 .wn-foot { margin-right: auto; }
 @keyframes pop { from { opacity: 0; transform: scale(0.96); } }
+.dialog-export { width: min(680px, calc(100vw - 32px)); }
+.dialog-export .dialog-body { display: flex; flex-direction: column; max-height: calc(100vh - 64px); }
+.xl-list { flex: 1; min-height: 0; overflow: auto; margin: 0 -20px; padding: 0 20px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+.xl-dataset { padding: 10px 0; border-bottom: 1px solid var(--border); }
+.xl-dataset:last-child { border-bottom: none; }
+.xl-dataset.off { opacity: 0.55; }
+.xl-dataset-head { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.xl-dataset-label { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; min-width: 0; }
+.xl-dataset-label input { margin: 0; }
+.xl-dataset-name { font-weight: 600; }
+.xl-rows { white-space: nowrap; }
+.xl-count { white-space: nowrap; }
+.xl-toggle { white-space: nowrap; }
+.xl-desc { margin: 4px 0 0 24px; line-height: 1.45; }
+.xl-fields { margin: 8px 0 0 24px; }
+.xl-fields-tools { display: flex; gap: 12px; margin-bottom: 6px; }
+.xl-fields-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 4px 12px; }
+.xl-field { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); cursor: pointer; min-width: 0; }
+.xl-field input { margin: 0; flex: none; }
+.xl-field span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xl-cover { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); cursor: pointer; }
+.xl-cover input { margin: 0; }
+.dialog-export .dialog-actions { align-items: center; }
+.preview-caption { font-size: var(--fs-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); margin: 10px 0 2px; }
+.count-pill.pill-change { background: var(--accent-soft); color: var(--accent-strong); }
 .dialog-body { padding: 18px 20px 16px; }
 .dialog-title { font-size: 15px; margin-bottom: 8px; }
 .dialog-msg { color: var(--text-2); font-size: var(--fs-sm); margin-bottom: 12px; }

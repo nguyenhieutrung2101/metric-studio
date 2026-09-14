@@ -3,9 +3,21 @@
  * Each item carries both languages; the dialog picks the active one.
  * Bump `version` here and in package.json when a build ships.
  */
-export const APP_VERSION = '0.2.0';
+export const APP_VERSION = '0.3.0';
 
 export const CHANGELOG = [
+  {
+    version: '0.3.0',
+    date: '2026-09-14',
+    title: { en: 'Free-text formulas, and Excel both ways', vi: 'Công thức dạng mô tả, và Excel hai chiều' },
+    items: [
+      { en: 'A formula may be marked "Free-text formula": a description in words for the rare case that cannot be an expression. It is allowed, never checked or executable, and always reported as a warning; the inputs written in brackets still feed the dependency graph.', vi: 'Công thức có thể đánh dấu "Công thức dạng mô tả": viết bằng lời cho số ít trường hợp không thành biểu thức được. Được phép, không kiểm tra và không chạy được, luôn được báo là cảnh báo; các đầu vào trong ngoặc vuông vẫn đi vào đồ thị phụ thuộc.' },
+      { en: 'Find them fast: "Free-text formulas only" in the Bindings and Metric Master filters, a "text" badge on the cell, the BINDING_FORMULA_FREE_TEXT rule in Quality, and a Formula_Mode column in every export.', vi: 'Lọc nhanh: "Chỉ công thức dạng mô tả" trong bộ lọc Gắn kịch bản và Metric Master, nhãn "mô tả" trên ô, quy tắc BINDING_FORMULA_FREE_TEXT ở Chất lượng, và cột Formula_Mode trong mọi bản xuất.' },
+      { en: 'Import from Excel: download a template (blank, or filled with your catalogue) with one sheet per kind of record, a hint row and example rows; fill it in and import it back. Codes are the keys, rows are created or updated, blank cells keep what is there, and every row that cannot be applied is named with its sheet and row number.', vi: 'Nhập từ Excel: tải mẫu (trống, hoặc kèm danh mục hiện có) với mỗi loại bản ghi một sheet, dòng gợi ý và dòng ví dụ; điền rồi nhập lại. Mã là khoá, dòng được tạo mới hoặc cập nhật, ô trống giữ nguyên, và mọi dòng không áp dụng được đều được nêu tên sheet và số dòng.' },
+      { en: 'Export to Excel: pick the datasets and the fields, get a formatted workbook in the app\'s theme with a cover sheet, frozen headers, filters and zebra rows. Your selection is remembered.', vi: 'Xuất ra Excel: chọn tập dữ liệu và trường, nhận file đã định dạng theo giao diện app với sheet bìa, tiêu đề cố định, bộ lọc và dòng kẻ xen kẽ. Lựa chọn của bạn được ghi nhớ.' },
+      { en: 'Workbooks are written and read by the app itself — still no runtime dependency.', vi: 'File Excel do chính app ghi và đọc — vẫn không có thư viện phụ thuộc.' },
+    ],
+  },
   {
     version: '0.2.0',
     date: '2026-09-14',

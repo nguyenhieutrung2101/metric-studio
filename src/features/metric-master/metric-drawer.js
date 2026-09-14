@@ -383,6 +383,19 @@ export class MetricDrawer {
     return this.bindingDrafts.get(scenarioId);
   }
 
+  /** The one way a binding draft changes: the field, then the dirty state, the tabs and the Save button. */
+  _bindingSetter(state) {
+    const d = state.draft;
+    return (path, value) => {
+      const [a, b] = path.split('.');
+      if (b) d[a][b] = value;
+      else d[a] = value;
+      state.dirty = !sameBinding(d, pickBinding(state.base));
+      this._renderBindingTabs();
+      this._updateDirty();
+    };
+  }
+
   _renderBindingPanel() {
     const panel = this.els.bindingPanel;
     clear(panel);
@@ -391,14 +404,7 @@ export class MetricDrawer {
     const scenario = this.ctx.store.get('scenarios', scenarioId);
     const state = this._bindingDraft(scenarioId);
     const d = state.draft;
-    const setField = (path, value) => {
-      const [a, b] = path.split('.');
-      if (b) d[a][b] = value;
-      else d[a] = value;
-      state.dirty = !sameBinding(d, pickBinding(state.base));
-      this._renderBindingTabs();
-      this._updateDirty();
-    };
+    const setField = this._bindingSetter(state);
 
     // Type selector
     const types = [BindingType.NONE, BindingType.SOURCE, BindingType.FORMULA, BindingType.ASSUMPTION];
@@ -463,9 +469,11 @@ export class MetricDrawer {
     const scenarioId = this.activeScenarioId;
     const d = state.draft;
     const backdrop = h('div', { class: 'formula-backdrop mono', 'aria-hidden': 'true' });
-    const textarea = h('textarea', { class: 'input mono formula-input', rows: 3, value: d.formulaText, placeholder: t('binding.formulaPlaceholder'), spellcheck: false, autocomplete: 'off' });
-    const editor = h('div', { class: 'formula-editor' }, backdrop, textarea);
+    const isText = d.formulaMode === 'text';
+    const textarea = h('textarea', { class: ['input', 'mono', 'formula-input', isText && 'formula-input-text'], rows: 3, value: d.formulaText, placeholder: t(isText ? 'binding.formulaPlaceholderText' : 'binding.formulaPlaceholder'), spellcheck: isText, autocomplete: 'off' });
+    const editor = h('div', { class: ['formula-editor', isText && 'formula-editor-text'] }, backdrop, textarea);
     const refsBox = h('div', { class: 'refs' });
+    const modeOf = () => ({ mode: d.formulaMode });
     const picker = refPicker({
       host: editor,
       search: (q) => this.ctx.selectors.suggestMetrics(q, 8, new Set([this.metricId])).map((m) => ({ id: m.id, label: m.name, sub: m.code, meta: (m.aliases || [])[0] || '' })),
@@ -486,9 +494,9 @@ export class MetricDrawer {
       },
     });
 
-    const paint = () => paintReferences(backdrop, textarea.value, state.preview);
+    const paint = () => paintReferences(backdrop, textarea.value, state.preview, d.formulaMode);
     const preview = debounce(() => {
-      state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId);
+      state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId, modeOf());
       paint();
       this._renderReferences(refsBox, state);
     }, 180);
@@ -527,18 +535,35 @@ export class MetricDrawer {
       commit();
       picker.open(openBracketQuery(textarea) || '');
     } } });
+    // The rare formula that is a description rather than an expression is
+    // opted into explicitly, never inferred from a parse failure: the person
+    // marking it knows the app will stop checking it and will keep warning.
+    const modeToggle = h('label', { class: ['formula-mode', isText && 'on'], title: t('binding.freeTextHint') },
+      h('input', { type: 'checkbox', checked: isText, on: { change: (e) => this._setFormulaMode(state, setField, e.target.checked ? 'text' : 'expression') } }),
+      h('span', { text: t('binding.freeText') }),
+    );
     container.append(
-      field(t('binding.formula'), editor, { required: true, hint: t('binding.formulaHint') }),
+      field(t('binding.formula'), editor, { required: true, hint: t(isText ? 'binding.freeTextHint' : 'binding.formulaHint') }),
       h('div', { class: 'formula-tools' }, insertBtn, h('span', { class: 'formula-legend' },
         h('span', { class: 'ref-swatch ok' }), h('span', { text: t('binding.legendResolved') }),
         h('span', { class: 'ref-swatch missing' }), h('span', { text: t('binding.legendMissing') }),
         h('span', { class: 'ref-swatch ambiguous' }), h('span', { text: t('binding.legendAmbiguous') }),
-      )),
+      ), h('span', { class: 'spacer' }), modeToggle),
       refsBox,
     );
-    state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId);
+    state.preview = this.ctx.services.bindings.preview(d.formulaText, scenarioId, modeOf());
     paint();
     this._renderReferences(refsBox, state);
+  }
+
+  /** Switch a formula between expression and free text; the editor re-renders in the new mode. */
+  _setFormulaMode(state, setField, mode) {
+    if (state.draft.formulaMode === mode) return;
+    setField('formulaMode', mode);
+    state.preview = null;
+    this._renderBindingPanel();
+    const box = this.els.bindingPanel.querySelector('.formula-input');
+    if (box) box.focus();
   }
 
   _renderReferences(box, state) {
@@ -549,7 +574,22 @@ export class MetricDrawer {
       box.appendChild(h('p', { class: 'hint', text: t('binding.formulaEmpty') }));
       return;
     }
-    for (const err of p.errors) box.appendChild(h('div', { class: 'ref-error' }, icon('warning', { size: 14 }), h('span', { text: t('binding.syntaxError', { message: err.message, pos: err.position + 1 }) })));
+    if (p.mode === 'text') {
+      // Free text is a warning by design; the notice says so where the text
+      // is typed, and counts what the description declares in brackets.
+      const n = p.references.length;
+      box.appendChild(h('div', { class: 'ref-notice' }, icon('warning', { size: 14 }), h('span', { text: n ? t('binding.freeTextNotice', { n }) : t('binding.freeTextNoRefs') })));
+    } else {
+      for (const err of p.errors) box.appendChild(h('div', { class: 'ref-error' }, icon('warning', { size: 14 }), h('span', { text: t('binding.syntaxError', { message: err.message, pos: err.position + 1 }) })));
+      if (p.errors.length) {
+        // The way out for a formula that is not meant to parse, offered once
+        // per error block rather than left to be discovered in a checkbox.
+        box.appendChild(h('div', { class: 'ref-switch' },
+          h('span', { class: 'muted small', text: t('binding.markFreeTextHint') }),
+          btn(t('binding.markFreeText'), { size: 'sm', on: { click: () => this._setFormulaMode(state, this._bindingSetter(state), 'text') } }),
+        ));
+      }
+    }
     if (!p.references.length) return;
     const list = h('ul', { class: 'ref-list' });
     for (const r of p.references) list.appendChild(this._renderReference(r, state));
@@ -1162,6 +1202,7 @@ function pickBinding(b) {
     legacyCode: b ? b.legacyCode || '' : '',
     source: { system: '', dataset: '', field: '', owner: '', frequency: '', note: '', ...(b ? b.source : {}) },
     formulaText: b ? b.formulaText || '' : '',
+    formulaMode: b && b.formulaMode === 'text' ? 'text' : 'expression',
     assumption: { value: '', basis: '', validFrom: '', validTo: '', note: '', ...(b ? b.assumption : {}) },
     status: b ? b.status : 'draft',
     note: b ? b.note || '' : '',
@@ -1252,10 +1293,10 @@ function replaceOpenBracket(textarea, token) {
  * mark carrying its resolution status. Positions come from the tokenizer,
  * statuses from the last preview, matched by reference identity.
  */
-function paintReferences(backdrop, text, preview) {
+function paintReferences(backdrop, text, preview, mode = 'expression') {
   const statusOf = new Map();
   for (const r of (preview && preview.references) || []) statusOf.set(referenceIdentity(r), r.status);
-  const { references } = parseFormula(text);
+  const { references } = parseFormula(text, { mode });
   const frag = document.createDocumentFragment();
   let cursor = 0;
   for (const r of references) {

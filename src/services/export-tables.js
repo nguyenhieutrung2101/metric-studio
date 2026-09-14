@@ -29,6 +29,7 @@ export const BINDING_COLUMNS = [
   ['Binding_Type', (r) => r.type],
   ['Status', (r) => r.status],
   ['Formula_Text', (r) => r.formulaText],
+  ['Formula_Mode', (r) => r.formulaMode],
   ['Source_System', (r) => r.sourceSystem],
   ['Source_Dataset', (r) => r.sourceDataset],
   ['Source_Field', (r) => r.sourceField],
@@ -57,6 +58,7 @@ export const EDGE_COLUMNS = [
   ['Reference_Text', (r) => r.raw || ''],
   ['Resolved', (r) => (r.resolved ? 'yes' : 'no')],
   ['Formula_Text', (r) => r.formulaText],
+  ['Formula_Mode', (r) => r.formulaMode || 'expression'],
 ];
 
 /** One row per binding, metrics and scenarios resolved to codes and names. */
@@ -74,6 +76,7 @@ export function bindingRows(store) {
       type: b.type,
       status: b.status,
       formulaText: b.type === 'formula' ? b.formulaText : '',
+      formulaMode: b.type === 'formula' ? (b.formulaMode || 'expression') : '',
       sourceSystem: b.source ? b.source.system : '',
       sourceDataset: b.source ? b.source.dataset : '',
       sourceField: b.source ? b.source.field : '',

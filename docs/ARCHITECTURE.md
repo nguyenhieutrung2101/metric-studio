@@ -504,6 +504,29 @@ The boundary has no back door. `importSnapshot` parses its input again even
 when a caller hands it a preview result that claims to be parsed already;
 parsing is idempotent and costs about 100 ms on a 3,000 metric snapshot.
 
+**Excel enters through the same door.** `excel-import.js` reads a filled
+template (`readTemplateWorkbook`: sheets matched by name, columns by
+normalised header, `Skip = x` rows dropped) and plans an *upsert by code*
+against the current catalogue (`planExcelImport`): codes are the keys, an
+existing record is patched field by field (blank keeps, `-` clears), new
+records come from the model factories, placements and dimension links given
+as a list replace the metric's list, members are re-levelled, and a formula
+that arrived or changed is resolved against the catalogue the file produces.
+Every row that cannot be applied — an unknown parent, unit, scenario or
+member code, an invalid status, a duplicate code in the file, a code that
+matches two existing records — is an error naming the sheet and the row, and
+a plan with errors has no snapshot. A clean plan is a full snapshot that
+goes through `parseSnapshot` and `BackupService.importSnapshot` exactly as a
+JSON backup would, restore point included. The template and the importer
+share one sheet definition (`excel-template.js`), so they cannot drift.
+
+`xlsx.js` writes and reads the workbook itself: `zip.js` is the container
+(CRC-32, store or raw deflate through the platform's Compression streams),
+`xml.js` a tolerant parser that matches by local name, so sheets from Excel,
+LibreOffice or Google Sheets read alike. Shared and inline strings, rich
+text, booleans, cached formula results and date-formatted serials are
+interpreted; nothing else of the format is.
+
 ### 4.3 Restore points
 
 Before every import, reset, clear and restore, the repository writes a full
@@ -545,6 +568,28 @@ neither replaces the other: the formula is the logic as its author wrote it;
 the edge table is what a pipeline needs to build lineage and execution order
 without a parser of its own. `Time_Context` is present in the export and
 empty — the model does not carry a time dimension yet.
+
+The Excel report (`excel-export.js`) is the same tables with a person in
+mind: the catalogue datasets share their rows with the import template
+(`catalogueRows`), the derived ones are the edge and issue tables above, a
+dialog picks datasets and fields, and the workbook carries a cover sheet,
+frozen headers, auto-filters and zebra rows styled from the app's live colour
+tokens (`readTheme()` reads `--accent` and friends off the document, with the
+token defaults as fallback).
+
+### 4.4c Free-text formulas
+
+A formula binding carries `formulaMode`: `expression` (the default; the
+grammar the parser checks) or `text` (a description in words). In text mode
+`parseFormula` extracts every well-formed `[reference]` and nothing else —
+no AST, no syntax errors — so resolution, the dependency graph, the editor's
+highlighting and the schema boundary all handle it through the one call they
+already make. Validation never emits `BINDING_FORMULA_SYNTAX` for a text
+formula; it always emits the warning `BINDING_FORMULA_FREE_TEXT` (with the
+count of declared references, zero being the message to write some), which
+is what keeps the rare case rare and findable. The mode is opted into
+explicitly in the drawer, never inferred from a parse failure, and is
+persisted, exported (`Formula_Mode`) and importable.
 
 ### 4.5 What the editor owes the person typing
 
