@@ -603,6 +603,7 @@ export const vi = {
   'io.excelTitle': 'Nhập file này?',
   'io.excelMessage': '{create} bản ghi sẽ được tạo mới, {update} được cập nhật tại chỗ và {remove} liên kết bị gỡ. Một điểm khôi phục được tạo trước, nên có thể hoàn tác.',
   'io.excelImported': 'Đã nhập từ Excel: {create} tạo mới, {update} cập nhật',
+  'io.excelStale': 'Danh mục đã thay đổi trong lúc file này đang mở, nên không có gì được nhập. Hãy đọc lại file để xem nó sẽ làm gì bây giờ.',
   'xl.dialogTitle': 'Xuất ra Excel',
   'xl.dialogHint': 'Tích chọn tập dữ liệu cần xuất; mở Trường để chỉ giữ các cột bạn cần. Mỗi tập dữ liệu một sheet, theo thứ tự này.',
   'xl.fields': 'Trường',

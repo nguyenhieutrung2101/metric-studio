@@ -313,7 +313,12 @@ export function mountImportExportView(container, ctx) {
       announce(t('io.excelImported', { create: formatNumber(totals.create), update: formatNumber(totals.update) }), repairs, restorePoint, restorePointError);
       await renderRestorePoints();
     } catch (err) {
-      ctx.toast.error(err.message);
+      // The preview was planned against a catalogue that has since moved, so
+      // the whole import was refused. Saying which record collided helps
+      // nobody: the file has to be previewed again either way.
+      const stale = err.name === 'ConflictError' || err.name === 'NotFoundError';
+      if (stale) closeExcelPreview();
+      ctx.toast.error(stale ? t('io.excelStale') : err.message);
     }
   }
 

@@ -603,6 +603,7 @@ export const en = {
   'io.excelTitle': 'Import this workbook?',
   'io.excelMessage': '{create} record(s) will be created, {update} updated in place and {remove} link(s) removed. A restore point is taken first, so this can be undone.',
   'io.excelImported': 'Imported from Excel: {create} created, {update} updated',
+  'io.excelStale': 'The catalogue changed while this file was open, so nothing was imported. Read the file again to see what it would do now.',
   'xl.dialogTitle': 'Export to Excel',
   'xl.dialogHint': 'Tick the datasets to include; open Fields to keep only the columns you need. One sheet per dataset, in this order.',
   'xl.fields': 'Fields',

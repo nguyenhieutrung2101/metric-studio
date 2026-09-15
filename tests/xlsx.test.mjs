@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { zipWrite, zipRead, crc32 } from '../src/utils/zip.js';
 import { parseXml, childrenOf, firstChild, textOf, attr, escapeXml } from '../src/utils/xml.js';
-import { writeWorkbook, readWorkbook, colLetter, colIndex, serialToIso, STYLES } from '../src/services/xlsx.js';
+import { writeWorkbook, readWorkbook, colLetter, colIndex, serialToIso, STYLES, isCellError } from '../src/services/xlsx.js';
 
 test('zip: entries round-trip, deflated when smaller, with correct CRCs', async () => {
   const big = 'metric studio '.repeat(500);
@@ -112,7 +112,11 @@ test('workbook: reads what other producers write — inline strings, rich text, 
   const rows = wb.sheets[0].rows;
   assert.deepEqual(rows[0], ['plain', 'rich text', 'inline', null, null]);
   assert.deepEqual(rows[1], [null, null, null, null, null], 'a skipped row is an empty row, not a shifted one');
-  assert.deepEqual(rows[2], ['2025-01-01', '2025-01-01 18:00', 'computed', null, true]);
+  // An error cell keeps its code. It is not a value, and folding it into
+  // null would make a broken lookup read as "this cell was left blank".
+  assert.deepEqual(rows[2].filter((_, i) => i !== 3), ['2025-01-01', '2025-01-01 18:00', 'computed', true]);
+  assert.ok(isCellError(rows[2][3]));
+  assert.equal(String(rows[2][3]), '#DIV/0!');
   assert.deepEqual(rows[3], [7, 8, null, null, null]);
   assert.deepEqual(wb.sheets[1].rows, []);
 });

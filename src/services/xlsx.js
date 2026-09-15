@@ -400,6 +400,32 @@ function parseSheet(root, sst, dateXf) {
   return out;
 }
 
+/**
+ * An Excel error cell: #N/A, #REF!, #VALUE! and the rest.
+ *
+ * It is not a value, and it is emphatically not a blank. The importer reads
+ * a blank as "keep what the record already has", so folding an error into
+ * null would turn a broken lookup in the workbook into a silent no-op on
+ * exactly the field the author meant to set.
+ */
+export class CellError {
+  constructor(code) {
+    this.code = String(code || '').trim() || '#ERROR';
+  }
+
+  toString() {
+    return this.code;
+  }
+
+  toJSON() {
+    return this.code;
+  }
+}
+
+export function isCellError(value) {
+  return value instanceof CellError;
+}
+
 function cellValue(c, sst, dateXf) {
   const t = attr(c, 't');
   const s = Number(attr(c, 's') || 0);
@@ -412,7 +438,7 @@ function cellValue(c, sst, dateXf) {
   if (t === 'inlineStr') return richText(firstChild(c, 'is'));
   if (t === 'str') return raw;
   if (t === 'b') return raw === '1' || raw === 'true';
-  if (t === 'e') return null;
+  if (t === 'e') return new CellError(raw);
   if (t === 'd') return raw;
   if (raw === '') return null;
   const num = Number(raw);
