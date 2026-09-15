@@ -5,7 +5,7 @@ import { referenceKey, padNumber } from '../utils/text.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 
 /** Records that only exist because of a metric and go with it. */
-const DEPENDENT_COLLECTIONS = ['metricStructures', 'bindings', 'metricDimensions'];
+const DEPENDENT_COLLECTIONS = ['metricStructures', 'bindings', 'metricDimensions', 'metricReports'];
 
 /** A cascade that missed a dependent the database holds; the caller retries once. */
 export class StaleCascadeError extends Error {

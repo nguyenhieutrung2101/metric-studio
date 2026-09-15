@@ -3,9 +3,21 @@
  * Each item carries both languages; the dialog picks the active one.
  * Bump `version` here and in package.json when a build ships.
  */
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.4.0';
 
 export const CHANGELOG = [
+  {
+    version: '0.4.0',
+    date: '2026-09-15',
+    title: { en: 'Reports beside the hierarchy, and rows that line up', vi: 'Báo cáo bên cạnh cây phân cấp, và các hàng thẳng lối' },
+    items: [
+      { en: 'Structure has two panes: the governance hierarchy on the left, Reports on the right. Create folders and reports, nest and reorder them, and link metrics to a report by picking them or dragging them across from a group.', vi: 'Cấu trúc có hai khung: cây phân cấp bên trái, Báo cáo bên phải. Tạo thư mục và báo cáo, lồng và sắp xếp chúng, và liên kết chỉ tiêu vào báo cáo bằng cách chọn hoặc kéo từ một nhóm sang.' },
+      { en: 'A metric knows where it is shown: the drawer\'s Structure tab lists its reports under its groups, the Insights panel shows them, and Quality flags a report with nothing in it, a link to a folder, or a duplicate report code.', vi: 'Chỉ tiêu biết mình được hiển thị ở đâu: tab Cấu trúc trong drawer liệt kê báo cáo ngay dưới nhóm, panel Insights cũng hiển thị, và Chất lượng báo báo cáo trống, liên kết vào thư mục, hoặc mã báo cáo trùng.' },
+      { en: 'Excel both ways for reports: Reports and Report_Metrics sheets in the template and the export, plus a Report_Codes column on the Metrics sheet.', vi: 'Excel hai chiều cho báo cáo: sheet Reports và Report_Metrics trong mẫu và bản xuất, cùng cột Report_Codes trên sheet Metrics.' },
+      { en: 'Dimensions: the dimension list takes half the width and carries its own "New dimension" button, so long names have room.', vi: 'Chiều phân tích: danh sách chiều chiếm nửa chiều rộng và có nút "Chiều mới" riêng, nên tên dài có chỗ.' },
+      { en: 'Rows line up: a metric name and its alias share a baseline with the code and the chips beside them, table headers no longer wrap, and the Insights header sits on the same line as the header next to it on every page.', vi: 'Các hàng thẳng lối: tên chỉ tiêu và tên khác cùng đường với mã và chip bên cạnh, tiêu đề bảng không còn xuống dòng, và tiêu đề Insights nằm cùng hàng với tiêu đề bên cạnh ở mọi trang.' },
+    ],
+  },
   {
     version: '0.3.0',
     date: '2026-09-14',

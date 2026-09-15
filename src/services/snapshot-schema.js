@@ -2,6 +2,7 @@ import { COLLECTIONS, SCHEMA_VERSION } from '../core/collections.js';
 import { createMetric, MetricStatus } from '../core/models/metric.js';
 import { createBinding } from '../core/models/binding.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
+import { createReport, createMetricReport, ReportKind } from '../core/models/report.js';
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
 import { createScenario, isValidScenarioCode } from '../core/models/scenario.js';
 import { createUnit } from '../core/models/unit.js';
@@ -30,10 +31,11 @@ export const APP_ID = 'metric-studio';
 
 /** Collections whose absence is fatal when another collection references them. */
 const REFERENCED_BY = {
-  metrics: ['bindings', 'metricStructures', 'metricDimensions'],
+  metrics: ['bindings', 'metricStructures', 'metricDimensions', 'metricReports'],
   scenarios: ['bindings'],
   structureNodes: ['metricStructures'],
   dimensions: ['dimensionMembers', 'metricDimensions'],
+  reports: ['metricReports'],
 };
 
 export function parseSnapshot(input) {
@@ -110,6 +112,8 @@ export function parseSnapshot(input) {
     dimensions: createDimension,
     dimensionMembers: createDimensionMember,
     metricDimensions: createMetricDimension,
+    reports: createReport,
+    metricReports: createMetricReport,
   };
 
   for (const c of COLLECTIONS) {
@@ -155,6 +159,7 @@ export function parseSnapshot(input) {
   const nodeIds = new Set(data.structureNodes.map((n) => n.id));
   const dimensionIds = new Set(data.dimensions.map((d) => d.id));
   const unitIds = new Set(data.units.map((u) => u.id));
+  const reportIds = new Set(data.reports.map((r) => r.id));
 
   // ---------------------------------------------------------------- referential repairs
   for (const m of data.metrics) {
@@ -166,16 +171,30 @@ export function parseSnapshot(input) {
   }
 
   data.structureNodes = repairHierarchy(data.structureNodes, nodeIds, addRepair, 'STRUCTURE');
+  data.reports = repairHierarchy(data.reports, reportIds, addRepair, 'REPORT');
+  // A report that ended up holding sub-items is a folder in all but name:
+  // renaming its kind keeps every record, and the file stays readable.
+  {
+    const parents = new Set(data.reports.map((r) => r.parentId).filter(Boolean));
+    for (const r of data.reports) {
+      if (r.kind !== ReportKind.FOLDER && parents.has(r.id)) {
+        r.kind = ReportKind.FOLDER;
+        addRepair('REPORT_KIND_FOLDER', 'Report holding sub-items: treated as a folder');
+      }
+    }
+  }
   data.dimensionMembers = repairMembers(data.dimensionMembers, dimensionIds, addRepair);
 
   data.bindings = dropWhere(data.bindings, (b) => !metricIds.has(b.metricId) || !scenarioIds.has(b.scenarioId), addRepair, 'BINDING_ORPHAN_DROPPED', 'Binding referencing a metric or scenario that is not in the file: dropped');
   data.metricStructures = dropWhere(data.metricStructures, (l) => !metricIds.has(l.metricId) || !nodeIds.has(l.structureNodeId), addRepair, 'PLACEMENT_ORPHAN_DROPPED', 'Structural placement referencing a missing metric or group: dropped');
   data.metricDimensions = dropWhere(data.metricDimensions, (l) => !metricIds.has(l.metricId) || !dimensionIds.has(l.dimensionId), addRepair, 'LINK_ORPHAN_DROPPED', 'Metric-dimension link referencing a missing record: dropped');
+  data.metricReports = dropWhere(data.metricReports, (l) => !metricIds.has(l.metricId) || !reportIds.has(l.reportId), addRepair, 'REPORT_LINK_ORPHAN_DROPPED', 'Metric-report link referencing a missing metric or report: dropped');
 
   // ---------------------------------------------------------------- composite uniqueness
   data.bindings = keepFirstByKey(data.bindings, (b) => `${b.metricId}|${b.scenarioId}`, addRepair, 'BINDING_DUPLICATE_DROPPED', 'More than one binding for the same metric and scenario: extra dropped');
   data.metricStructures = keepFirstByKey(data.metricStructures, (l) => `${l.metricId}|${l.structureNodeId}`, addRepair, 'PLACEMENT_DUPLICATE_DROPPED', 'The same metric placed twice in the same group: extra dropped');
   data.metricDimensions = keepFirstByKey(data.metricDimensions, (l) => `${l.metricId}|${l.dimensionId}`, addRepair, 'LINK_DUPLICATE_DROPPED', 'The same metric linked twice to the same dimension: extra dropped');
+  data.metricReports = keepFirstByKey(data.metricReports, (l) => `${l.metricId}|${l.reportId}`, addRepair, 'REPORT_LINK_DUPLICATE_DROPPED', 'The same metric linked twice to the same report: extra dropped');
 
   // Exactly one primary placement per metric.
   const byMetric = new Map();

@@ -111,7 +111,7 @@ export function mountDependencyView(container, ctx) {
     emptyNode: tableEmpty,
     renderRow: renderEdgeRow,
     header: tableHead,
-    minWidth: 28 + 56 + 160 + 64 + 64 + 160 + 40 + 96 + 90 + 64 + 80,
+    minWidth: 28 + 72 + 160 + 64 + 84 + 160 + 40 + 96 + 150 + 72 + 80,
     onSelect: (r) => { tableState.selected = r ? r.id : null; renderTableInsights(r); },
     onActivate: (r) => ctx.openMetric(r.targetMetricId, { section: 'bindings', scenarioId: r.targetScenarioId }),
   });
@@ -151,6 +151,8 @@ export function mountDependencyView(container, ctx) {
     const tableOn = viewMode === 'table';
     graphArea.hidden = tableOn;
     tableArea.hidden = !tableOn;
+    // The table view starts with a table header; the Insights header sits on its line.
+    layout.el.classList.toggle('ws-table-head', tableOn);
     // Depth is a graph setting; it still shapes the table when the table
     // lists this graph's edges, so it stays visible in that scope.
     for (const el of [depthDown, depthUp]) el.hidden = tableOn && tableState.scope === 'all';
@@ -167,7 +169,7 @@ export function mountDependencyView(container, ctx) {
     return h('div', { class: ['edge-row', 'row', !r.resolved && 'unresolved'], role: 'row', tabindex: '-1', dataset: { id: r.id }, title: t('dep.tableHint') },
       h('span', { class: 'mono', text: r.targetScenario }),
       h('span', { class: 'cell-two' }, h('span', { class: 'mono muted', text: r.targetCode }), h('span', { class: 'ellipsis', text: r.targetName })),
-      h('span', null, bindingChip('', 'formula')),
+      h('span', { class: 'cell-chip' }, bindingChip('', 'formula')),
       h('span', { class: ['mono', r.referenceType === 'cross-scenario' && 'tag tag-cross'], text: r.sourceScenario }),
       h('span', { class: 'cell-two' }, h('span', { class: 'mono muted', text: r.sourceCode }), h('span', { class: ['ellipsis', !r.resolved && 'danger'], text: r.resolved ? r.sourceName : t('dep.unresolved') })),
       h('span', { class: 'num', text: String(r.sequence) }),

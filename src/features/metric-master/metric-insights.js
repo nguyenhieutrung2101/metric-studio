@@ -51,6 +51,14 @@ export function renderMetricInsights(ctx, metricId, { onEdit, onDependencies = n
       : h('p', { class: 'insight-para muted', text: t('mm.unplaced') }),
   );
 
+  const shown = selectors.reportLinksByMetric(m.id).filter((l) => store.has('reports', l.reportId));
+  const reports = insightSection(t('drawer.reports'),
+    shown.length
+      ? h('ul', { class: 'insight-list' }, shown.map((l) => h('li', null,
+        h('button', { type: 'button', class: 'link ellipsis', on: { click: () => ctx.router.navigate('structure', { report: l.reportId }) } }, selectors.reportPathLabel(l.reportId, ' › ')))))
+      : h('p', { class: 'insight-para muted', text: t('insights.noReports') }),
+  );
+
   const coverage = insightSection(t('insights.coverage'),
     h('ul', { class: 'insight-list' }, scenarios.map((s) => {
       const b = bindings.get(s.id);
@@ -81,5 +89,5 @@ export function renderMetricInsights(ctx, metricId, { onEdit, onDependencies = n
     onDependencies && btn(t('dep.openMetric').replace(/.*/, t('drawer.menu.openDependencies')), { size: 'sm', icon: 'graph', on: { click: () => onDependencies('down') } }),
   );
 
-  return h('div', { class: ['insight', sev && `insight-sev-${sev}`] }, head, definition, structure, coverage, dimensions, lineage, quality, actions);
+  return h('div', { class: ['insight', sev && `insight-sev-${sev}`] }, head, definition, structure, reports, coverage, dimensions, lineage, quality, actions);
 }

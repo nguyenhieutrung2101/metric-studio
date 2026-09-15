@@ -3,6 +3,7 @@ import { MetricStatus } from '../core/models/metric.js';
 import { nodeKey } from '../core/models/binding.js';
 import { referenceKey } from '../utils/text.js';
 import { referenceIdentity } from './formula-parser.js';
+import { ReportKind } from '../core/models/report.js';
 
 /**
  * ValidationService — pure rule engine.
@@ -11,8 +12,8 @@ import { referenceIdentity } from './formula-parser.js';
  *
  * Issue {
  *   id, severity: 'error'|'warning'|'info', code, message, params,
- *   entity: { type, id },   // 'metric' | 'binding' | 'structure' | 'dimension' | 'member' | 'metricDimension'
- *   metricId?, scenarioId?, dimensionId?, structureNodeId?
+ *   entity: { type, id },   // 'metric' | 'binding' | 'structure' | 'dimension' | 'member' | 'metricDimension' | 'metricStructure' | 'report' | 'metricReport'
+ *   metricId?, scenarioId?, dimensionId?, structureNodeId?, reportId?
  * }
  *
  * Messages are English defaults; the UI maps `code` + `params` to the active
@@ -31,6 +32,7 @@ export function validateAll({ store, selectors, dependencies }) {
   validateStructure(store, selectors, add);
   validateBindings(store, selectors, add);
   validateDimensions(store, selectors, add);
+  validateReports(store, selectors, add);
   validateDependencies(store, selectors, dependencies, add);
   return issues;
 }
@@ -246,6 +248,50 @@ function validateDimensions(store, selectors, add) {
       });
       if (missing.length) add(Severity.WARNING, 'METRIC_DIMENSION_ALLOWED_MISSING', entity, `"${metric.name}" × "${dim.name}": ${missing.length} allowed member(s) no longer exist`, { metricId: l.metricId, dimensionId: l.dimensionId, params: { ...params, count: missing.length } });
     }
+  }
+}
+
+function validateReports(store, selectors, add) {
+  const { byId } = selectors.reportTree();
+  const codes = new Map();
+  for (const r of store.list('reports')) {
+    const key = referenceKey(r.code);
+    if (key) {
+      if (!codes.has(key)) codes.set(key, []);
+      codes.get(key).push(r);
+    }
+  }
+  for (const r of store.list('reports')) {
+    const entity = { type: 'report', id: r.id };
+    const params = { name: r.name, code: r.code };
+    const entry = byId.get(r.id);
+    if (entry && entry.orphanCycle) add(Severity.ERROR, 'REPORT_CYCLE', entity, `Report item "${r.name}" is part of a parent cycle`, { reportId: r.id, params });
+    if (r.parentId && !store.has('reports', r.parentId)) add(Severity.ERROR, 'REPORT_ORPHAN', entity, `Report item "${r.name}" references a missing parent`, { reportId: r.id, params });
+    else if (r.parentId) {
+      const parent = store.get('reports', r.parentId);
+      if (parent.kind !== ReportKind.FOLDER) add(Severity.WARNING, 'REPORT_PARENT_NOT_FOLDER', entity, `"${r.name}" sits under "${parent.name}", which is a report, not a folder`, { reportId: r.id, params: { ...params, parent: parent.name } });
+    }
+    if (!r.name) add(Severity.WARNING, 'REPORT_MISSING_NAME', entity, 'A report item has no name', { reportId: r.id, params });
+    const dup = codes.get(referenceKey(r.code));
+    if (dup && dup.length > 1) add(Severity.WARNING, 'REPORT_DUPLICATE_CODE', entity, `Duplicate report code "${r.code}"`, { reportId: r.id, params });
+    if (r.kind === ReportKind.REPORT && selectors.metricIdsInReport(r.id).size === 0) add(Severity.INFO, 'REPORT_EMPTY', entity, `Report "${r.name}" shows no metric yet`, { reportId: r.id, params });
+  }
+  const pairs = new Map();
+  for (const l of store.list('metricReports')) {
+    const k = `${l.metricId}:${l.reportId}`;
+    pairs.set(k, (pairs.get(k) || 0) + 1);
+  }
+  for (const l of store.list('metricReports')) {
+    const entity = { type: 'metricReport', id: l.id };
+    const metric = store.get('metrics', l.metricId);
+    const report = store.get('reports', l.reportId);
+    const params = { metric: metric ? metric.name : l.metricId, report: report ? report.name : l.reportId };
+    if (!metric || !report) {
+      add(Severity.ERROR, 'REPORT_LINK_ORPHAN', entity, `Metric ↔ report link references a missing ${metric ? 'report' : 'metric'}`, { metricId: metric ? l.metricId : null, reportId: report ? l.reportId : null, params });
+      continue;
+    }
+    if (report.kind !== ReportKind.REPORT) add(Severity.WARNING, 'REPORT_LINK_TO_FOLDER', entity, `"${metric.name}" is linked to "${report.name}", which is a folder`, { metricId: l.metricId, reportId: l.reportId, params });
+    if (pairs.get(`${l.metricId}:${l.reportId}`) > 1) add(Severity.WARNING, 'REPORT_LINK_DUPLICATE', entity, `"${metric.name}" is linked to "${report.name}" more than once`, { metricId: l.metricId, reportId: l.reportId, params });
   }
 }
 

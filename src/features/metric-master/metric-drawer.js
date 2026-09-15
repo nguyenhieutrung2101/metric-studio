@@ -236,7 +236,7 @@ export class MetricDrawer {
     } else if (issue.entity.type === 'metricDimension') {
       this.sections.dimensions.setOpen(true);
       this.sections.dimensions.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
-    } else if (issue.code.includes('UNPLACED') || issue.entity.type === 'metricStructure') {
+    } else if (issue.code.includes('UNPLACED') || issue.entity.type === 'metricStructure' || issue.entity.type === 'metricReport' || issue.entity.type === 'report') {
       this.sections.structure.setOpen(true);
       this.sections.structure.el.scrollIntoView({ block: 'start', behavior: 'smooth' });
     } else {
@@ -284,6 +284,7 @@ export class MetricDrawer {
     clear(body);
     const links = selectors.placementsByMetric(this.metricId).filter((l) => store.has('structureNodes', l.structureNodeId));
     this.sections.structure.setBadge(links.length || '');
+    body.appendChild(h('h4', { class: 'drawer-subhead' }, h('span', { text: t('drawer.groups') }), h('span', { class: 'section-badge', text: links.length || '' })));
     if (!links.length) body.appendChild(h('p', { class: 'hint warn', text: t('drawer.noPlacement') }));
     const list = h('ul', { class: 'link-list' });
     for (const l of links) {
@@ -302,6 +303,28 @@ export class MetricDrawer {
       onSelect: (item, { clear: reset }) => { reset(); this._run(() => services.structure.placeMetric(this.metricId, item.id)); },
     });
     body.appendChild(picker.el);
+
+    // Where the metric is shown. The groups say where it belongs; the
+    // reports say who reads it. Same grammar, one block down.
+    const shown = selectors.reportLinksByMetric(this.metricId).filter((l) => store.has('reports', l.reportId));
+    body.appendChild(h('h4', { class: 'drawer-subhead' }, h('span', { text: t('drawer.reports') }), h('span', { class: 'section-badge', text: shown.length || '' })));
+    if (!shown.length) body.appendChild(h('p', { class: 'hint', text: t('drawer.noReports') }));
+    const reportList = h('ul', { class: 'link-list' });
+    for (const l of shown) {
+      const path = selectors.reportPath(l.reportId);
+      reportList.appendChild(h('li', { class: 'link-item' },
+        icon('file', { size: 14, className: 'link-icon' }),
+        h('span', { class: 'link-path' }, path.map((r, i) => h('span', { class: ['crumb', i === path.length - 1 && 'last'], text: r.name, on: { click: () => this.ctx.router.navigate('structure', { report: r.id }) } }))),
+        btn('', { icon: 'close', size: 'sm', title: t('drawer.removeReport'), on: { click: () => this._run(() => services.reports.unlinkMetric(l.id)) } }),
+      ));
+    }
+    body.appendChild(reportList);
+    const linked = new Set(shown.map((l) => l.reportId));
+    body.appendChild(combobox({
+      placeholder: t('drawer.addReport'),
+      search: (q) => searchReports(this.ctx, q, linked),
+      onSelect: (item, { clear: reset }) => { reset(); this._run(() => services.reports.linkMetric(this.metricId, item.id)); },
+    }).el);
   }
 
   // ------------------------------------------------------------ dimensions
@@ -1157,7 +1180,7 @@ export class MetricDrawer {
       // Other metrics changed: reference previews may resolve differently.
       for (const state of this.bindingDrafts.values()) if (state.draft.type === BindingType.FORMULA) state.preview = null;
       if (this.els.bindingPanel && this._bindingDraft(this.activeScenarioId).draft.type === BindingType.FORMULA) this._renderBindingPanel();
-    } else if (c === 'metricStructures' || c === 'structureNodes') {
+    } else if (c === 'metricStructures' || c === 'structureNodes' || c === 'reports' || c === 'metricReports') {
       this._renderStructure();
     } else if (c === 'metricDimensions' || c === 'dimensions' || c === 'dimensionMembers') {
       this._renderDimensions();
@@ -1240,6 +1263,20 @@ export function searchNodes(ctx, query, exclude = new Set(), limit = 12) {
   }
   out.sort((a, b) => a.depth - b.depth || a.label.localeCompare(b.label));
   return out.slice(0, limit);
+}
+
+/** Reports (never folders) a metric can be linked to, matched on name, code and folder path. */
+export function searchReports(ctx, query, exclude = new Set(), limit = 12) {
+  const q = (query || '').toLowerCase();
+  const out = [];
+  for (const r of ctx.selectors.reportsSorted()) {
+    if (exclude.has(r.id)) continue;
+    const path = ctx.selectors.reportPath(r.id).slice(0, -1).map((x) => x.name).join(' / ');
+    if (q && !`${r.code} ${r.name} ${path}`.toLowerCase().includes(q)) continue;
+    out.push({ id: r.id, label: r.name, sub: path, meta: r.code });
+    if (out.length >= limit) break;
+  }
+  return out;
 }
 
 export function nodeOptions(ctx) {

@@ -161,6 +161,106 @@ export function createSelectors(store) {
 
   const nodePathLabel = (nodeId, sep = ' / ') => nodePath(nodeId).map((n) => n.name).join(sep);
 
+  // ---------------------------------------------------------------- reports
+  const reportTree = () => cached('reportTree', ['reports'], () => buildTree(store.list('reports')));
+
+  const reportLinkIndex = () =>
+    cached('reportLinkIndex', ['metricReports'], () => {
+      const byReport = new Map();
+      const byMetric = new Map();
+      for (const l of store.list('metricReports')) {
+        if (!byReport.has(l.reportId)) byReport.set(l.reportId, []);
+        byReport.get(l.reportId).push(l);
+        if (!byMetric.has(l.metricId)) byMetric.set(l.metricId, []);
+        byMetric.get(l.metricId).push(l);
+      }
+      const bySort = (a, b) => a.sortOrder - b.sortOrder || compareText(a.createdAt, b.createdAt);
+      for (const list of byReport.values()) list.sort(bySort);
+      for (const list of byMetric.values()) list.sort(bySort);
+      return { byReport, byMetric };
+    });
+
+  /** Links of one report, in their sort order. */
+  const reportLinks = (reportId) => reportLinkIndex().byReport.get(reportId) || EMPTY_ARRAY;
+  /** Links of one metric: the reports it is shown in. */
+  const reportLinksByMetric = (metricId) => reportLinkIndex().byMetric.get(metricId) || EMPTY_ARRAY;
+
+  const metricIdsInReport = (reportId) => {
+    const map = cached('metricIdsInReport', ['metricReports', 'metrics'], () => {
+      const out = new Map();
+      for (const [id, links] of reportLinkIndex().byReport) {
+        const set = new Set();
+        for (const l of links) if (store.has('metrics', l.metricId)) set.add(l.metricId);
+        out.set(id, set);
+      }
+      return out;
+    });
+    return map.get(reportId) || EMPTY_SET;
+  };
+
+  /** Deduplicated metric ids in a report or folder and everything below it. */
+  const reportSubtreeIndex = () =>
+    cached('reportSubtreeIndex', ['reports', 'metricReports', 'metrics'], () => {
+      const { roots, byId } = reportTree();
+      const result = new Map();
+      const walk = (entry, path) => {
+        if (result.has(entry.node.id)) return result.get(entry.node.id);
+        if (path.has(entry.node.id)) return EMPTY_SET;
+        path.add(entry.node.id);
+        const set = new Set(metricIdsInReport(entry.node.id));
+        for (const child of entry.children) for (const id of walk(child, path)) set.add(id);
+        path.delete(entry.node.id);
+        result.set(entry.node.id, set);
+        return set;
+      };
+      for (const r of roots) walk(r, new Set());
+      for (const entry of byId.values()) if (!result.has(entry.node.id)) walk(entry, new Set());
+      return result;
+    });
+
+  const metricIdsUnderReport = (reportId) => reportSubtreeIndex().get(reportId) || EMPTY_SET;
+
+  /** { direct, total, reports, folders } — metrics here, metrics below, sub-items below. */
+  const reportCounts = (reportId) => {
+    const entry = reportTree().byId.get(reportId);
+    let reports = 0;
+    let folders = 0;
+    const visit = (e, path) => {
+      for (const c of e.children) {
+        if (path.has(c.node.id)) continue;
+        if (c.node.kind === 'folder') folders += 1;
+        else reports += 1;
+        path.add(c.node.id);
+        visit(c, path);
+        path.delete(c.node.id);
+      }
+    };
+    if (entry) visit(entry, new Set([reportId]));
+    return { direct: metricIdsInReport(reportId).size, total: metricIdsUnderReport(reportId).size, reports, folders };
+  };
+
+  const reportPath = (reportId) => {
+    const entry = reportTree().byId.get(reportId);
+    if (!entry) return [];
+    return entry.path.map((id) => store.get('reports', id)).filter(Boolean);
+  };
+
+  const reportPathLabel = (reportId, sep = ' / ') => reportPath(reportId).map((r) => r.name).join(sep);
+
+  /** Reports (kind 'report' only), sorted by their path, for pickers. */
+  const reportsSorted = () =>
+    cached('reportsSorted', ['reports'], () => {
+      const out = [];
+      const visit = (entries) => {
+        for (const e of entries) {
+          if (e.node.kind !== 'folder') out.push(e.node);
+          visit(e.children);
+        }
+      };
+      visit(reportTree().roots);
+      return out;
+    });
+
   // ---------------------------------------------------------------- bindings
   const bindingIndex = () =>
     cached('bindingIndex', ['bindings'], () => {
@@ -364,6 +464,15 @@ export function createSelectors(store) {
     unplacedMetricIds,
     nodePath,
     nodePathLabel,
+    reportTree,
+    reportLinks,
+    reportLinksByMetric,
+    metricIdsInReport,
+    metricIdsUnderReport,
+    reportCounts,
+    reportPath,
+    reportPathLabel,
+    reportsSorted,
     bindingsByMetric,
     bindingFor,
     coverageOf,

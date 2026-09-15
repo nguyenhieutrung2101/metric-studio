@@ -132,7 +132,7 @@ test('a failed cascade delete removes nothing at all', async () => {
 test('a successful cascade delete leaves no orphan behind', async () => {
   const ctx = await createContext();
   await ctx.metrics.remove('m-revenue');
-  for (const c of ['metricStructures', 'bindings', 'metricDimensions']) {
+  for (const c of ['metricStructures', 'bindings', 'metricDimensions', 'metricReports']) {
     assert.equal(ctx.store.list(c).some((r) => r.metricId === 'm-revenue'), false, `${c} has no orphan`);
   }
 });

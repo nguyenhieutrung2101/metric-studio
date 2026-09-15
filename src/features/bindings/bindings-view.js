@@ -294,7 +294,7 @@ export function mountBindingsView(container, ctx) {
   }
 
   // ---------------------------------------------------------------- layout + sync
-  const layout = workspaceLayout({ header: header.el, context: context.el, main, insights: insights.el, className: 'bindings-ws' });
+  const layout = workspaceLayout({ header: header.el, context: context.el, main, insights: insights.el, className: 'bindings-ws ws-table-head' });
   layout.el.insertBefore(filters.el, layout.body);
   container.appendChild(layout.el);
 

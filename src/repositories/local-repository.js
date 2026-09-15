@@ -4,7 +4,7 @@ import { MemoryRepository, UniquenessError } from './memory-repository.js';
 import { UNIQUE_KEYS, uniqueKeyOf } from '../core/collections.js';
 
 const DB_NAME = 'metric-studio';
-const DB_VERSION = 4;
+export const DB_VERSION = 5; // v5: reports + metricReports object stores
 const RESTORE_STORE = '_restorePoints';
 const SEQUENCE_STORE = '_sequences';
 const UNIQUE_INDEX = 'uk';

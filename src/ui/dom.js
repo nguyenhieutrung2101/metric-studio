@@ -106,6 +106,7 @@ const ICONS = {
   chevronRight: 'M9 6l6 6-6 6-1.4-1.4L12.2 12 7.6 7.4z',
   chevronDown: 'M6 9l6 6 6-6-1.4-1.4L12 12.2 7.4 7.6z',
   folder: 'M3 5h6l2 2h10v12H3z',
+  file: 'M6 3h8l4 4v14H6zm8 0v4h4M9 12h6M9 16h6',
   warning: 'M12 3 2 21h20zm0 6v6m0 2v2',
   check: 'M5 12.5 9.5 17 19 7.5l-1.4-1.4-8.1 8.1-3.1-3.1z',
   more: 'M6 12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm8 0a2 2 0 1 1-4 0 2 2 0 0 1 4 0z',

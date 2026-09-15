@@ -22,6 +22,7 @@ import { COLLECTIONS } from '../core/collections.js';
 import { createUnit } from '../core/models/unit.js';
 import { createScenario, isValidScenarioCode } from '../core/models/scenario.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
+import { createReport, createMetricReport, ReportKind } from '../core/models/report.js';
 import { createMetric, METRIC_STATUSES } from '../core/models/metric.js';
 import { createBinding, BINDING_TYPES, BINDING_STATUSES, FORMULA_MODES, BindingType } from '../core/models/binding.js';
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
@@ -167,7 +168,7 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   }
   if (errors.length) return { ok: false, errors, warnings, changes: summarize(), snapshot: null, parsed: null, rowsRead, sheetsFound };
 
-  const factories = { units: createUnit, scenarios: createScenario, metrics: createMetric, structureNodes: createStructureNode, metricStructures: createMetricStructure, bindings: createBinding, dimensions: createDimension, dimensionMembers: createDimensionMember, metricDimensions: createMetricDimension };
+  const factories = { units: createUnit, scenarios: createScenario, metrics: createMetric, structureNodes: createStructureNode, metricStructures: createMetricStructure, bindings: createBinding, dimensions: createDimension, dimensionMembers: createDimensionMember, metricDimensions: createMetricDimension, reports: createReport, metricReports: createMetricReport };
   const err = (spec, row, message) => errors.push({ sheet: spec.name, row, message });
   const rowsOf = (key) => (read.sheets[key] ? read.sheets[key].rows : []);
 
@@ -227,6 +228,8 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   const bindingsByPair = new Map(snapshot.bindings.map((b) => [`${b.metricId}|${b.scenarioId}`, b]));
   const toResolve = new Set();
   const linksByPair = new Map(snapshot.metricDimensions.map((l) => [`${l.metricId}|${l.dimensionId}`, l]));
+  const reportsIdx = indexBy(snapshot.reports, (r) => codeKey(r.code));
+  const reportLinksByPair = new Map(snapshot.metricReports.map((l) => [`${l.metricId}|${l.reportId}`, l]));
 
   const seenInFile = (spec) => {
     const seen = new Map();
@@ -300,6 +303,42 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       if (rec.parentId !== parentId) {
         rec.parentId = parentId;
         if (existing) touch(rec, 'structureNodes');
+      }
+    }
+  }
+  // ---- reports (folders and reports; parents in a second pass, like the structure)
+  {
+    const spec = specOf('reports');
+    const dup = seenInFile(spec);
+    const pending = [];
+    for (const { row, values } of rowsOf('reports')) {
+      const code = text(values.Code);
+      if (!code) { err(spec, row, 'Code is required'); continue; }
+      if (dup(codeKey(code), row)) continue;
+      const existing = lookup(reportsIdx, code, spec, row, 'Report');
+      const name = text(values.Name);
+      if (!existing && !name) { err(spec, row, 'Name is required for a new report or folder'); continue; }
+      const kindChoice = choice(values.Kind, ['folder', 'report'], spec, row, 'Kind');
+      if (kindChoice === false) continue;
+      const kind = kindChoice === '' ? ReportKind.REPORT : kindChoice;
+      const sortOrder = number(values.Sort_Order, spec, row, 'Sort_Order');
+      if (sortOrder === false) continue;
+      const rec = upsert('reports', existing, { code, name, kind, owner: text(values.Owner), description: text(values.Description), sortOrder });
+      remember(reportsIdx, rec, codeKey(code));
+      if (values.Parent_Code !== undefined) pending.push({ rec, existing, row, parentCode: String(values.Parent_Code).trim() });
+    }
+    for (const { rec, existing, row, parentCode } of pending) {
+      let parentId = null;
+      if (parentCode !== CLEAR) {
+        const parent = lookup(reportsIdx, parentCode, spec, row, 'Report');
+        if (!parent) { if (!errors.some((e) => e.sheet === spec.name && e.row === row)) err(spec, row, `Parent_Code "${parentCode}" does not match any report folder`); continue; }
+        if (parent.id === rec.id) { err(spec, row, 'An item cannot be its own parent'); continue; }
+        if (parent.kind !== ReportKind.FOLDER) { err(spec, row, `Parent_Code "${parentCode}" is a report; only a folder can hold items`); continue; }
+        parentId = parent.id;
+      }
+      if (rec.parentId !== parentId) {
+        rec.parentId = parentId;
+        if (existing) touch(rec, 'reports');
       }
     }
   }
@@ -403,6 +442,18 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
         }
         if (!bad) replaceLinks('metricDimensions', rec.id, targets, (dim) => ({ metricId: rec.id, dimensionId: dim.id }), (l) => l.dimensionId);
       }
+      if (values.Report_Codes !== undefined) {
+        const codes = String(values.Report_Codes).trim() === CLEAR ? [] : splitList(values.Report_Codes);
+        const targets = [];
+        let bad = false;
+        for (const c of codes) {
+          const report = lookup(reportsIdx, c, spec, row, 'Report');
+          if (!report) { err(spec, row, `Report_Codes: "${c}" does not match any report`); bad = true; break; }
+          if (report.kind !== ReportKind.REPORT) { err(spec, row, `Report_Codes: "${c}" is a folder; metrics are linked to reports`); bad = true; break; }
+          if (!targets.includes(report)) targets.push(report);
+        }
+        if (!bad) replaceLinks('metricReports', rec.id, targets, (report) => ({ metricId: rec.id, reportId: report.id }), (l) => l.reportId);
+      }
     }
   }
   // ---- bindings
@@ -493,6 +544,28 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       linksByPair.set(pair, rec);
     }
   }
+  // ---- report contents: one row per metric shown in a report
+  {
+    const spec = specOf('reportMetrics');
+    const dup = seenInFile(spec);
+    for (const { row, values } of rowsOf('reportMetrics')) {
+      const reportCode = text(values.Report_Code);
+      const metricCode = text(values.Metric_Code);
+      if (!reportCode || !metricCode) { err(spec, row, 'Report_Code and Metric_Code are required'); continue; }
+      const report = lookup(reportsIdx, reportCode, spec, row, 'Report');
+      if (!report) { if (!errors.some((e) => e.sheet === spec.name && e.row === row)) err(spec, row, `Report_Code "${reportCode}" does not match any report`); continue; }
+      if (report.kind !== ReportKind.REPORT) { err(spec, row, `Report_Code "${reportCode}" is a folder; metrics are linked to reports`); continue; }
+      const metric = lookup(metrics, metricCode, spec, row, 'Metric');
+      if (!metric) { if (!errors.some((e) => e.sheet === spec.name && e.row === row)) err(spec, row, `Metric_Code "${metricCode}" does not match any metric`); continue; }
+      const pair = `${metric.id}|${report.id}`;
+      if (dup(pair, row)) continue;
+      const sortOrder = number(values.Sort_Order, spec, row, 'Sort_Order');
+      if (sortOrder === false) continue;
+      const existing = reportLinksByPair.get(pair) || null;
+      const rec = upsert('metricReports', existing, { metricId: metric.id, reportId: report.id, sortOrder, note: text(values.Note) });
+      reportLinksByPair.set(pair, rec);
+    }
+  }
 
   if (errors.length) return { ok: false, errors, warnings, changes: summarize(), snapshot: null, parsed: null, rowsRead, sheetsFound };
   // A formula that arrived or changed is resolved against the catalogue the
@@ -558,6 +631,10 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
     if (collection === 'metricDimensions') {
       for (const l of next) linksByPair.set(`${l.metricId}|${l.dimensionId}`, l);
       for (const l of keep.values()) linksByPair.delete(`${l.metricId}|${l.dimensionId}`);
+    }
+    if (collection === 'metricReports') {
+      for (const l of next) reportLinksByPair.set(`${l.metricId}|${l.reportId}`, l);
+      for (const l of keep.values()) reportLinksByPair.delete(`${l.metricId}|${l.reportId}`);
     }
   }
 

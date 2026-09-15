@@ -31,12 +31,12 @@ export function mountDimensionsView(container, ctx) {
   // ---------------------------------------------------------------- header
   const newBtn = btn(t('dims.new'), { kind: 'primary', size: 'sm', icon: 'plus', on: { click: () => newDimension() } });
   const meta = h('span', { class: 'muted small' });
-  const header = pageHeader({ title: t('nav.dimensions'), subtitle: t('dims.subtitle'), meta, actions: [newBtn] });
+  const header = pageHeader({ title: t('nav.dimensions'), subtitle: t('dims.subtitle'), meta });
 
   // ---------------------------------------------------------------- dimension list (side)
   const listEl = h('div', { class: 'dims-list', role: 'listbox' });
   const side = h('aside', { class: 'pane tree-pane' },
-    h('div', { class: 'pane-head' }, h('span', { class: 'pane-title', text: t('dims.title') })),
+    h('div', { class: 'pane-head' }, h('span', { class: 'pane-title', text: t('dims.title') }), h('div', { class: 'pane-actions' }, newBtn)),
     listEl,
   );
 
@@ -81,7 +81,7 @@ export function mountDimensionsView(container, ctx) {
   // ---------------------------------------------------------------- member hierarchy (main)
   const addMemberBtn = btn(t('dims.addMember'), { size: 'sm', icon: 'plus', on: { click: () => state.dimensionId && addMember(state.dimensionId, null) } });
   const hierarchy = hierarchyWorkspace({
-    title: t('dims.title'),
+    title: t('dims.membersPane'),
     emptyText: t('dims.pick'),
     expanded,
     onToggle: rememberExpanded,
@@ -139,7 +139,7 @@ export function mountDimensionsView(container, ctx) {
   function renderHierarchy() {
     const d = state.dimensionId ? store.get('dimensions', state.dimensionId) : null;
     if (!d) {
-      hierarchy.setTitle(t('dims.title'));
+      hierarchy.setTitle(t('dims.membersPane'));
       hierarchy.setEmptyText(t('dims.pick'));
       addMemberBtn.disabled = true;
     } else {

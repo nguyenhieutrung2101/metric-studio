@@ -12,6 +12,8 @@ export const COLLECTIONS = Object.freeze([
   'dimensions',
   'dimensionMembers',
   'metricDimensions',
+  'reports',
+  'metricReports',
 ]);
 
 export const SCHEMA_VERSION = 1;
@@ -19,8 +21,8 @@ export const SCHEMA_VERSION = 1;
 /**
  * Structural uniqueness enforced at the persistence boundary, not in the UI.
  * These are relationships that simply cannot exist twice: a metric has one
- * binding per scenario, sits once in a given group, and is linked once to a
- * given dimension.
+ * binding per scenario, sits once in a given group, is linked once to a
+ * given dimension and appears once in a given report.
  *
  * Business codes (metric code, dimension code) are deliberately NOT here.
  * Duplicated codes are a governance finding the warning centre must report on
@@ -30,6 +32,7 @@ export const UNIQUE_KEYS = Object.freeze({
   bindings: ['metricId', 'scenarioId'],
   metricStructures: ['metricId', 'structureNodeId'],
   metricDimensions: ['metricId', 'dimensionId'],
+  metricReports: ['metricId', 'reportId'],
 });
 
 export function uniqueKeyOf(collection, record) {

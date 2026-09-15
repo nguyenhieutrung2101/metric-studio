@@ -105,7 +105,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .sev-dot.sev-info { background: var(--accent); opacity: 0.6; }
 
 /* ---------- list / table ---------- */
-.list-meta { flex: none; display: flex; align-items: center; gap: 12px; padding: 6px 14px; font-size: var(--fs-sm); color: var(--text-2); }
+.list-meta { flex: none; display: flex; align-items: center; gap: 12px; min-height: var(--pane-head-h); padding: 0 14px; font-size: var(--fs-sm); color: var(--text-2); }
 .crumbs { display: flex; align-items: center; gap: 4px; min-width: 0; overflow: hidden; }
 .crumb { cursor: pointer; white-space: nowrap; }
 .crumb:hover { color: var(--accent); }
@@ -114,6 +114,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .count-label { margin-left: auto; white-space: nowrap; }
 .table-head { flex: none; display: grid; align-items: center; height: 30px; font-size: var(--fs-grid-head); padding: 0 14px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); background: var(--surface-2); font-size: var(--fs-xs); font-weight: 600; color: var(--text-2); text-transform: uppercase; letter-spacing: 0.04em; }
 .table-head .col-name { flex-direction: row; justify-content: flex-start; }
+/* A header cell is one line, always: a label that would wrap is cut with an ellipsis instead of pushing its text off the line its neighbours sit on. */
+.table-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.th > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .th { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; padding: 0; text-align: left; cursor: pointer; color: inherit; font: inherit; text-transform: inherit; letter-spacing: inherit; }
 .th:hover { color: var(--text); }
 .sort-mark { font-size: 9px; }
@@ -151,6 +154,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); margi
 .binding-row { grid-template-columns: 96px minmax(200px, 1fr) repeat(2, minmax(220px, 1.2fr)) 120px 28px; column-gap: 10px; }
 .issue-row { grid-template-columns: 24px minmax(200px, 1.1fr) minmax(280px, 2fr) 160px; column-gap: 10px; }
 .col-name { min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.3; }
+/* Metric rows: every cell aligns to the first text line, so a name with an
+   alias under it shares a line with the code, the unit and the chips beside
+   it. Cells stretch to the row's height (the pinned identity columns need
+   their background to), and each one pads down to the shared first line. */
+.metric-row.row { align-items: stretch; }
+.metric-row.row > * { padding-top: 10px; line-height: 17px; }
+.metric-row.row .col-name { justify-content: flex-start; line-height: 17px; }
+.metric-row.row .name-alias { line-height: 12px; }
+.metric-row.row .col-binding { padding-top: 8.5px; align-items: flex-start; }
+.metric-row.row .col-warn { padding-top: 10px; display: flex; align-items: flex-start; height: 100%; }
+.metric-row.row .col-warn .sev-dot { margin-top: 4px; }
+html[data-density="compact"] .metric-row.row > * { padding-top: 7px; }
+html[data-density="compact"] .metric-row.row .col-binding { padding-top: 5.5px; }
+html[data-density="compact"] .metric-row.row .name-alias { display: none; }
 .name-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
 .name-alias { font-size: var(--fs-xs); color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-family: var(--mono); }
 .col-code { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-2); }
@@ -328,6 +345,9 @@ span.stat { cursor: default; }
 .link-item.clickable { cursor: pointer; }
 .link-item.clickable:hover { border-color: var(--accent); background: var(--accent-soft); }
 .link-item .btn { margin-left: auto; }
+.link-item .link-icon { color: var(--text-3); }
+.drawer-subhead { display: flex; align-items: center; gap: 4px; margin: 12px 0 6px; font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-3); }
+.drawer-subhead:first-child { margin-top: 0; }
 .link-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .link-path { flex: 1; min-width: 0; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .link-path .crumb { color: var(--text-2); font-size: var(--fs-xs); }
@@ -631,12 +651,13 @@ span.stat { cursor: default; }
 /* ---------- dependency edge table ---------- */
 .edge-table { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .edge-table .list-host { flex: 1; min-height: 0; }
-.edge-row { display: grid; grid-template-columns: 56px minmax(160px, 1.4fr) 64px 64px minmax(160px, 1.4fr) 40px 96px minmax(90px, 0.8fr) 64px; gap: 10px; align-items: center; padding: 0 14px; }
+.edge-row { display: grid; grid-template-columns: 72px minmax(160px, 1.4fr) 64px 84px minmax(160px, 1.4fr) 40px 96px minmax(150px, 0.8fr) 72px; gap: 10px; align-items: center; padding: 0 14px; }
 .edge-row.row { height: 36px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .edge-row.row:hover { background: var(--surface-2); }
 .edge-row.unresolved { background: var(--danger-soft); }
 .edge-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .edge-row .cell-two { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.edge-row .cell-chip { display: flex; align-items: center; }
 .edge-row .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .edge-row .danger { color: var(--danger); }
 .toolbar.sub { border-top: none; }
