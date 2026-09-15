@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContext } from './_setup.mjs';
-import { freshFactory, freshDbName, openRepo, openTab, rawOpen, rawDone, rawAll } from './_idb.mjs';
+import { freshFactory, freshDbName, openRepo, openTab, reload, rawOpen, rawDone, rawAll } from './_idb.mjs';
 import { DB_VERSION } from '../src/repositories/local-repository.js';
 import { COLLECTIONS } from '../src/repositories/repository.js';
 import { validateAll } from '../src/services/validation-service.js';
 import { parseSnapshot } from '../src/services/snapshot-schema.js';
 import { buildDemoSnapshot } from '../src/data/seed.js';
+import { Store } from '../src/core/store/store.js';
+import { createSelectors } from '../src/core/store/selectors.js';
 import { writeWorkbook, readWorkbook } from '../src/services/xlsx.js';
 import { readTemplateWorkbook, planExcelImport, previewExcelImport } from '../src/services/excel-import.js';
 import { buildTemplateWorkbook } from '../src/services/excel-template.js';
@@ -304,4 +306,169 @@ test('Excel: the filled template carries reports both ways, and the export offer
   const rows = read.sheets[0].rows;
   assert.deepEqual(rows[0], ['Code', 'Name', 'Kind', 'Path']);
   assert.ok(rows.some((r) => r[3] && String(r[3]).includes('›')), 'the path shows the folder');
+});
+
+// ---------------------------------------------------------------- two tabs, one database
+/**
+ * R02 / R09. A link's token says what the link was, never what its target is
+ * or what a folder holds. Everything a move or a kind change depends on is
+ * therefore re-read where the data lives, inside the transaction that writes.
+ */
+test('two tabs: a link cannot be moved into a report another tab deleted', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  await b.reports.delete('r-hotel-m', { strategy: 'moveToParent' });
+  // Tab A still sees the report and the metric's link to another one.
+  assert.ok(a.store.has('reports', 'r-hotel-m'), 'the stale tab has not noticed');
+  await assert.rejects(() => a.reports.moveLink('m-revenue', 'r-fin-q', 'r-hotel-m'), (e) => e.name === 'NotFoundError');
+  await assert.rejects(() => a.reports.linkMetric('m-revenue', 'r-hotel-m'), (e) => e.name === 'NotFoundError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricReports');
+  assert.equal(stored.some((l) => l.reportId === 'r-hotel-m'), false, 'no link points at the deleted report');
+  assert.ok(stored.some((l) => l.metricId === 'm-revenue' && l.reportId === 'r-fin-q'), 'the source link is untouched');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: merging a link into a report that has just lost it does not leave the metric in neither', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  // Both reports show the metric; tab A is about to move the BOD tháng link
+  // into Tài chính quý, which already has one.
+  const targetLink = a.selectors.reportLinksByMetric('m-revenue').find((l) => l.reportId === 'r-fin-q');
+  assert.ok(targetLink, 'the demo has the metric in both reports');
+  await b.reports.unlinkMetric(targetLink.id);
+  await assert.rejects(() => a.reports.moveLink('m-revenue', 'r-bod-m', 'r-fin-q'), (e) => e.name === 'NotFoundError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricReports');
+  assert.ok(stored.some((l) => l.metricId === 'm-revenue' && l.reportId === 'r-bod-m'), 'the source link survived the refused move');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: a folder cannot become a report while another tab is putting something in it', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const folder = await a.reports.create({ name: 'Ban kiểm soát', kind: ReportKind.FOLDER, code: 'RPT.BKS' });
+  await reload(b);
+  // A sees an empty folder and decides it should be a report; B fills it.
+  await b.reports.create({ parentId: folder.id, name: 'BKS quý', code: 'RPT.BKS.Q' });
+  assert.equal(a.selectors.reportTree().byId.get(folder.id).children.length, 0, 'the stale tab still sees it empty');
+  await assert.rejects(() => a.reports.update(folder.id, { kind: ReportKind.REPORT }), (e) => e.name === 'ValidationFailure' && e.field === 'kind');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'reports');
+  assert.equal(stored.find((r) => r.id === folder.id).kind, 'folder', 'the parent of the new child is still a folder');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: a report cannot become a folder while another tab is linking a metric to it', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const report = await a.reports.create({ name: 'Trống', kind: ReportKind.REPORT, code: 'RPT.EMPTY' });
+  await reload(b);
+  await b.reports.linkMetric('m-revenue', report.id);
+  assert.equal(a.selectors.reportLinks(report.id).length, 0, 'the stale tab still sees it empty');
+  await assert.rejects(() => a.reports.update(report.id, { kind: ReportKind.FOLDER }), (e) => e.name === 'ValidationFailure' && e.field === 'kind');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'reports');
+  assert.equal(stored.find((r) => r.id === report.id).kind, 'report');
+  // Renaming the same record is not a question about what it holds, so it still works.
+  await a.reports.rename(report.id, 'Vẫn là báo cáo');
+  assert.equal(a.store.get('reports', report.id).name, 'Vẫn là báo cáo');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: a metric cannot be moved into a structure group another tab deleted', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const empty = await a.structure.createNode({ name: 'Nhóm trống', code: 'TRONG' });
+  await reload(b);
+  await b.structure.deleteNode(empty.id);
+  await assert.rejects(() => a.structure.moveMetric('m-revenue', 's-kd-dt', empty.id), (e) => e.name === 'NotFoundError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricStructures');
+  assert.equal(stored.some((l) => l.structureNodeId === empty.id), false, 'no placement points at the deleted group');
+  assert.ok(stored.some((l) => l.metricId === 'm-revenue' && l.structureNodeId === 's-kd-dt'), 'the original placement is untouched');
+  // And the metric still has exactly one primary placement.
+  const primaries = stored.filter((l) => l.metricId === 'm-revenue' && l.isPrimary);
+  assert.equal(primaries.length, 1);
+  a.repo.close(); b.repo.close();
+});
+
+/**
+ * R10. The rule the UI and the service enforce — a folder shows no metrics,
+ * a report holds no sub-items — is the same rule a file has to obey. The
+ * import refuses the row; the backup boundary, which may never refuse a
+ * legacy file, repairs it and says so.
+ */
+test('Excel: a kind the file\'s own contents contradict is refused on the row that asked for it', async () => {
+  const ctx = await createContext();
+  const holdsMetrics = await workbookOf({
+    Reports: [['Code *', 'Name *', 'Kind'], ['RPT.BOD.M', '', 'folder']],
+  });
+  const refused = planExcelImport(readTemplateWorkbook(holdsMetrics), ctx.store);
+  assert.equal(refused.ok, false);
+  assert.deepEqual(refused.errors.map((e) => [e.sheet, e.row]), [['Reports', 2]]);
+  assert.match(refused.errors[0].message, /still shows 6 metric\(s\); a folder cannot show metrics/);
+
+  const holdsItems = await workbookOf({
+    Reports: [['Code *', 'Name *', 'Kind'], ['RPT.BOD', '', 'report']],
+  });
+  const refusedToo = planExcelImport(readTemplateWorkbook(holdsItems), ctx.store);
+  assert.equal(refusedToo.ok, false);
+  assert.match(refusedToo.errors[0].message, /still holds 2 sub-item\(s\); a report cannot hold sub-items/);
+
+  // Emptying the report in the same file makes the same change legitimate.
+  const emptied = await workbookOf({
+    Reports: [['Code *', 'Name *', 'Kind'], ['RPT.BOD.M', '', 'folder']],
+    Metrics: [
+      ['Code', 'Name', 'Report_Codes'],
+      ['M.000001', '', '-'], ['M.000018', '', '-'], ['M.000019', '', '-'],
+      ['M.000002', '', '-'], ['M.000005', '', '-'], ['M.000020', '', '-'],
+    ],
+  });
+  const ok = planExcelImport(readTemplateWorkbook(emptied), ctx.store);
+  assert.equal(ok.ok, true, JSON.stringify(ok.errors));
+  assert.equal(ok.snapshot.reports.find((r) => r.id === 'r-bod-m').kind, 'folder');
+  assert.equal(ok.snapshot.metricReports.some((l) => l.reportId === 'r-bod-m'), false);
+
+  // A kind this file never mentions is the catalogue's business: an item
+  // already in a state the app would refuse must not refuse the whole file.
+  const untouched = planExcelImport(readTemplateWorkbook(await workbookOf({
+    Units: [['Code *', 'Name *'], ['KWH', 'Kilowatt hour']],
+  })), ctx.store);
+  assert.equal(untouched.ok, true, JSON.stringify(untouched.errors));
+});
+
+test('the backup boundary makes kind and content agree instead of importing a state the app refuses', () => {
+  const full = buildDemoSnapshot();
+  const parsed = parseSnapshot({
+    ...full,
+    reports: [...full.reports, { id: 'r-folder-only-metrics', parentId: null, kind: 'folder', name: 'Thật ra là báo cáo', code: 'RPT.X' }],
+    metricReports: [
+      ...full.metricReports,
+      { id: 'mr-x', metricId: 'm-revenue', reportId: 'r-folder-only-metrics' },
+      // A folder that holds sub-items cannot also show a metric.
+      { id: 'mr-bod', metricId: 'm-revenue', reportId: 'r-bod' },
+    ],
+  });
+  assert.equal(parsed.ok, true, parsed.errors.join('; '));
+  const repairs = Object.fromEntries(parsed.repairs.map((r) => [r.code, r.count]));
+  assert.equal(repairs.REPORT_KIND_REPORT, 1, 'a folder that only shows metrics is a report');
+  assert.equal(repairs.REPORT_LINK_TO_FOLDER_DROPPED, 1, 'the link to a real folder is dropped, and reported');
+  assert.equal(parsed.data.reports.find((r) => r.id === 'r-folder-only-metrics').kind, 'report');
+  assert.equal(parsed.data.reports.find((r) => r.id === 'r-bod').kind, 'folder');
+  assert.equal(parsed.data.metricReports.some((l) => l.reportId === 'r-bod'), false);
+  assert.ok(parsed.data.metricReports.some((l) => l.id === 'mr-x'));
+
+  // What comes out of the boundary never trips the rule it just repaired.
+  const store = new Store();
+  store.hydrate(parsed.data);
+  const selectors = createSelectors(store);
+  const issues = validateAll({ store, selectors, dependencies: null });
+  assert.deepEqual(issues.filter((i) => i.code === 'REPORT_LINK_TO_FOLDER'), []);
+  assert.deepEqual(issues.filter((i) => i.code === 'REPORT_PARENT_NOT_FOLDER'), []);
 });

@@ -229,6 +229,9 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   const toResolve = new Set();
   const linksByPair = new Map(snapshot.metricDimensions.map((l) => [`${l.metricId}|${l.dimensionId}`, l]));
   const reportsIdx = indexBy(snapshot.reports, (r) => codeKey(r.code));
+  // Which row of the Reports sheet claimed which item, so a kind the file's
+  // own contents contradict is reported on the row that asked for it.
+  const reportRows = new Map();
   const reportLinksByPair = new Map(snapshot.metricReports.map((l) => [`${l.metricId}|${l.reportId}`, l]));
 
   const seenInFile = (spec) => {
@@ -325,6 +328,7 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       if (sortOrder === false) continue;
       const rec = upsert('reports', existing, { code, name, kind, owner: text(values.Owner), description: text(values.Description), sortOrder });
       remember(reportsIdx, rec, codeKey(code));
+      reportRows.set(rec.id, row);
       if (values.Parent_Code !== undefined) pending.push({ rec, existing, row, parentCode: String(values.Parent_Code).trim() });
     }
     for (const { rec, existing, row, parentCode } of pending) {
@@ -564,6 +568,30 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       const existing = reportLinksByPair.get(pair) || null;
       const rec = upsert('metricReports', existing, { metricId: metric.id, reportId: report.id, sortOrder, note: text(values.Note) });
       reportLinksByPair.set(pair, rec);
+    }
+  }
+
+  // ---- what an item holds decides what it may be
+  // The sheets are read one after another, so a row that turns a report into
+  // a folder is only wrong once the whole file is known: the metrics may be
+  // linked by an earlier sheet, by a later one, or already be in the
+  // catalogue. The rule the UI and the service enforce is therefore checked
+  // here on the state the plan would produce, and reported on the row that
+  // asked for the kind.
+  {
+    const spec = specOf('reports');
+    const children = new Map();
+    for (const r of snapshot.reports) if (r.parentId) children.set(r.parentId, (children.get(r.parentId) || 0) + 1);
+    const links = new Map();
+    for (const l of snapshot.metricReports) links.set(l.reportId, (links.get(l.reportId) || 0) + 1);
+    for (const r of snapshot.reports) {
+      const row = reportRows.get(r.id);
+      // An item this file never mentions is the catalogue's business, not
+      // this import's: a pre-existing problem must not refuse the file.
+      if (row === undefined) continue;
+      const label = r.code || r.name;
+      if (r.kind === ReportKind.FOLDER && links.get(r.id)) err(spec, row, `"${label}" still shows ${links.get(r.id)} metric(s); a folder cannot show metrics`);
+      if (r.kind === ReportKind.REPORT && children.get(r.id)) err(spec, row, `"${label}" still holds ${children.get(r.id)} sub-item(s); a report cannot hold sub-items`);
     }
   }
 

@@ -59,15 +59,28 @@ export class ReportService {
     if (!existing) throw new NotFoundError('reports', id);
     const merged = createReport({ ...existing, ...patch, id, createdAt: existing.createdAt, parentId: existing.parentId, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
-    if (merged.kind !== existing.kind) {
-      // A folder that holds anything stays a folder; a report that shows
-      // anything stays a report.
-      if (existing.kind === ReportKind.FOLDER && this._siblings(id).length) throw new ValidationFailure('A folder that holds sub-items cannot become a report', 'kind');
-      if (existing.kind === ReportKind.REPORT && this.selectors.reportLinks(id).length) throw new ValidationFailure('A report that shows metrics cannot become a folder', 'kind');
+    if (merged.kind === existing.kind) {
+      const saved = await this.repo.saveReport(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
+      this.store.upsert('reports', saved);
+      return saved;
     }
-    const saved = await this.repo.saveReport(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
-    this.store.upsert('reports', saved);
-    return saved;
+    // A folder that holds anything stays a folder; a report that shows
+    // anything stays a report. What an item holds is not part of its own
+    // token — another tab adds a child or a link without the item changing
+    // at all — so this question cannot be answered from a mirror. It is
+    // asked again where the data lives, inside the transaction that writes
+    // the new kind, and refused there.
+    assertKindFits(merged.kind, this._siblings(id), this.selectors.reportLinks(id));
+    await commitExclusive(this.repo, this.store, (tx) => {
+      const current = tx.get('reports', id);
+      if (!current) throw new NotFoundError('reports', id);
+      assertKindFits(merged.kind, tx.list('reports').filter((r) => r.parentId === id), tx.list('metricReports').filter((l) => l.reportId === id));
+      const work = new UnitOfWork().save('reports', merged, expectedToken == null ? tokenOf(current) : expectedToken);
+      work.guard('reports', (stored) => assertKindFits(merged.kind, stored.filter((r) => r.parentId === id), []));
+      work.guard('metricReports', (stored) => assertKindFits(merged.kind, [], stored.filter((l) => l.reportId === id)));
+      return work;
+    });
+    return this.store.get('reports', id);
   }
 
   rename(id, name, expectedToken) {
@@ -226,24 +239,60 @@ export class ReportService {
     return saved;
   }
 
-  /** Move a metric's link from one report to another: one record changes. */
+  /**
+   * Move a metric's link from one report to another: one record changes.
+   *
+   * The link's own token says nothing about the report it is being moved to,
+   * so the target is re-read and re-checked inside the transaction. The
+   * merging case earns the same care: dropping the source link because the
+   * target already shows the metric is only safe while that target link is
+   * still there, otherwise the metric ends up in neither report.
+   */
   async moveLink(metricId, fromReportId, toReportId) {
-    const to = this.store.get('reports', toReportId);
-    if (!to) throw new NotFoundError('reports', toReportId);
-    if (to.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
-    const links = this.selectors.reportLinksByMetric(metricId);
-    const link = links.find((l) => l.reportId === fromReportId);
-    if (!link) return this.linkMetric(metricId, toReportId);
-    const already = links.find((l) => l.reportId === toReportId);
-    if (already) {
-      await this.unlinkMetric(link.id);
-      return already;
-    }
-    const target = this.selectors.reportLinks(toReportId);
-    const saved = await this.repo.saveMetricReport({ ...link, reportId: toReportId, sortOrder: target.length ? target[target.length - 1].sortOrder + 1 : 1 }, tokenOf(link));
-    this.store.upsert('metricReports', saved);
-    return saved;
+    let movedId = null;
+    await commitExclusive(this.repo, this.store, (tx) => {
+      const target = tx.get('reports', toReportId);
+      if (!target) throw new NotFoundError('reports', toReportId);
+      if (target.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
+      if (!tx.get('metrics', metricId)) throw new NotFoundError('metrics', metricId);
+      const links = tx.list('metricReports').filter((l) => l.metricId === metricId);
+      const source = links.find((l) => l.reportId === fromReportId) || null;
+      const already = links.find((l) => l.reportId === toReportId) || null;
+      const work = new UnitOfWork().require('reports', toReportId);
+      work.guard('reports', (stored) => {
+        const r = stored.find((x) => x.id === toReportId);
+        if (r && r.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
+      });
+      if (already) {
+        movedId = already.id;
+        // The metric is already shown there; the move is the removal of the
+        // source link, and only while the target link still exists.
+        if (source) {
+          work.require('metricReports', already.id);
+          work.remove('metricReports', source.id, tokenOf(source));
+        }
+        return work;
+      }
+      if (!source) {
+        const order = tx.list('metricReports').filter((l) => l.reportId === toReportId);
+        const link = createMetricReport({ metricId, reportId: toReportId, sortOrder: order.length ? Math.max(...order.map((l) => l.sortOrder)) + 1 : 1 });
+        movedId = link.id;
+        work.require('metrics', metricId).save('metricReports', link, null);
+        return work;
+      }
+      const order = tx.list('metricReports').filter((l) => l.reportId === toReportId);
+      movedId = source.id;
+      work.save('metricReports', { ...source, reportId: toReportId, sortOrder: order.length ? Math.max(...order.map((l) => l.sortOrder)) + 1 : 1 }, tokenOf(source));
+      return work;
+    });
+    return this.store.get('metricReports', movedId);
   }
+}
+
+/** What an item holds decides what it may be. Thrown from a guard as well as from the planner. */
+function assertKindFits(kind, children, links) {
+  if (kind === ReportKind.REPORT && children.length) throw new ValidationFailure('A folder that holds sub-items cannot become a report', 'kind');
+  if (kind === ReportKind.FOLDER && links.length) throw new ValidationFailure('A report that shows metrics cannot become a folder', 'kind');
 }
 
 function isDescendantIn(byId, id, ancestorId) {

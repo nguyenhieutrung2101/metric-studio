@@ -172,17 +172,6 @@ export function parseSnapshot(input) {
 
   data.structureNodes = repairHierarchy(data.structureNodes, nodeIds, addRepair, 'STRUCTURE');
   data.reports = repairHierarchy(data.reports, reportIds, addRepair, 'REPORT');
-  // A report that ended up holding sub-items is a folder in all but name:
-  // renaming its kind keeps every record, and the file stays readable.
-  {
-    const parents = new Set(data.reports.map((r) => r.parentId).filter(Boolean));
-    for (const r of data.reports) {
-      if (r.kind !== ReportKind.FOLDER && parents.has(r.id)) {
-        r.kind = ReportKind.FOLDER;
-        addRepair('REPORT_KIND_FOLDER', 'Report holding sub-items: treated as a folder');
-      }
-    }
-  }
   data.dimensionMembers = repairMembers(data.dimensionMembers, dimensionIds, addRepair);
 
   data.bindings = dropWhere(data.bindings, (b) => !metricIds.has(b.metricId) || !scenarioIds.has(b.scenarioId), addRepair, 'BINDING_ORPHAN_DROPPED', 'Binding referencing a metric or scenario that is not in the file: dropped');
@@ -195,6 +184,34 @@ export function parseSnapshot(input) {
   data.metricStructures = keepFirstByKey(data.metricStructures, (l) => `${l.metricId}|${l.structureNodeId}`, addRepair, 'PLACEMENT_DUPLICATE_DROPPED', 'The same metric placed twice in the same group: extra dropped');
   data.metricDimensions = keepFirstByKey(data.metricDimensions, (l) => `${l.metricId}|${l.dimensionId}`, addRepair, 'LINK_DUPLICATE_DROPPED', 'The same metric linked twice to the same dimension: extra dropped');
   data.metricReports = keepFirstByKey(data.metricReports, (l) => `${l.metricId}|${l.reportId}`, addRepair, 'REPORT_LINK_DUPLICATE_DROPPED', 'The same metric linked twice to the same report: extra dropped');
+
+  // What an item holds decides what it is, and the file is read after its
+  // links have been cleaned, so what it holds is finally known. A report
+  // that ended up holding sub-items is a folder in all but name; a folder
+  // that only shows metrics is a report. An item that does both cannot keep
+  // the metrics — a folder never shows any — and loses those links here,
+  // reported, rather than importing a state the app itself refuses to
+  // create and the warning centre then flags on every run.
+  {
+    const parents = new Set(data.reports.map((r) => r.parentId).filter(Boolean));
+    const linked = new Set(data.metricReports.map((l) => l.reportId));
+    const foldersWithMetrics = new Set();
+    for (const r of data.reports) {
+      if (parents.has(r.id)) {
+        if (r.kind !== ReportKind.FOLDER) {
+          r.kind = ReportKind.FOLDER;
+          addRepair('REPORT_KIND_FOLDER', 'Report holding sub-items: treated as a folder');
+        }
+        if (linked.has(r.id)) foldersWithMetrics.add(r.id);
+      } else if (linked.has(r.id) && r.kind !== ReportKind.REPORT) {
+        r.kind = ReportKind.REPORT;
+        addRepair('REPORT_KIND_REPORT', 'Folder that only shows metrics: treated as a report');
+      }
+    }
+    if (foldersWithMetrics.size) {
+      data.metricReports = dropWhere(data.metricReports, (l) => foldersWithMetrics.has(l.reportId), addRepair, 'REPORT_LINK_TO_FOLDER_DROPPED', 'Metric linked to an item that holds sub-items, so it is a folder: link dropped');
+    }
+  }
 
   // Exactly one primary placement per metric.
   const byMetric = new Map();
