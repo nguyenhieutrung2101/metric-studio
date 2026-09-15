@@ -120,3 +120,54 @@ test('workbook: reads what other producers write — inline strings, rich text, 
   assert.deepEqual(rows[3], [7, 8, null, null, null]);
   assert.deepEqual(wb.sheets[1].rows, []);
 });
+
+/**
+ * A grid costs its area, not its contents, and both the area and the bytes
+ * behind it are claims the file makes. A few kilobytes must not be able to
+ * ask for hundreds of megabytes.
+ */
+const sheetOf = (cells) => [
+  { name: '[Content_Types].xml', data: '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>' },
+  { name: 'xl/workbook.xml', data: '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Metrics" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+  { name: 'xl/_rels/workbook.xml.rels', data: '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="w" Target="worksheets/sheet1.xml"/></Relationships>' },
+  { name: 'xl/worksheets/sheet1.xml', data: `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${cells}</sheetData></worksheet>` },
+];
+
+test('a far cell holding nothing but a style does not become a grid of millions of cells', async () => {
+  // Two rows of data, and one formatted but empty cell 20,000 rows down.
+  const bytes = await zipWrite(sheetOf(
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>Code</t></is></c><c r="B1" t="inlineStr"><is><t>Name</t></is></c></row>'
+    + '<row r="2"><c r="A2" t="inlineStr"><is><t>M.1</t></is></c><c r="B2" t="inlineStr"><is><t>Doanh thu</t></is></c></row>'
+    + '<row r="20000"><c r="IV20000" s="1"/></row>',
+  ));
+  assert.ok(bytes.length < 4096, 'the file itself is tiny');
+  const wb = await readWorkbook(bytes);
+  const rows = wb.sheets[0].rows;
+  assert.equal(rows.length, 2, 'the sheet is as tall as its data');
+  assert.equal(rows[0].length, 2, 'and as wide');
+  assert.deepEqual(rows[1], ['M.1', 'Doanh thu']);
+});
+
+test('a sheet that really is enormous is refused, not allocated', async () => {
+  const bytes = await zipWrite(sheetOf(
+    '<row r="1"><c r="A1" t="inlineStr"><is><t>Code</t></is></c></row>'
+    + '<row r="40000"><c r="IV40000"><v>1</v></c></row>',
+  ));
+  await assert.rejects(() => readWorkbook(bytes), /more than this can read at once/);
+});
+
+test('a part that claims to unpack to more than the budget is refused before it is read', async () => {
+  const bytes = await zipWrite(sheetOf('<row r="1"><c r="A1"><v>1</v></c></row>'));
+  // Rewrite what the central directory claims the last part unpacks to. The
+  // archive is still only a few hundred bytes; the claim is what is checked.
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let patched = 0;
+  for (let i = 0; i < bytes.length - 4; i += 1) {
+    if (v.getUint32(i, true) === 0x02014b50) {
+      v.setUint32(i + 24, 900 * 1024 * 1024, true);
+      patched += 1;
+    }
+  }
+  assert.ok(patched > 0, 'the central directory was found');
+  await assert.rejects(() => readWorkbook(bytes), /unpacks to 900 MB, more than the 64 MB/);
+});

@@ -14,7 +14,7 @@ import { buildDemoSnapshot } from './data/seed.js';
 import { parseSnapshot } from './services/snapshot-schema.js';
 import { h, btn, icon, clear, formatNumber } from './ui/dom.js';
 import { t, setLanguage, getLanguage, onLanguageChange, LANGUAGES } from './ui/i18n.js';
-import { createRouter } from './ui/router.js';
+import { createRouter, scopedRouter } from './ui/router.js';
 import { createToast } from './ui/toast/toast.js';
 import { createDrawer } from './ui/drawer/drawer.js';
 import { openMenu } from './ui/components/menu.js';
@@ -153,7 +153,7 @@ export async function start(rootEl) {
       if (!entry) {
         const host = h('div', { class: 'view-slot' });
         shell.viewHost.appendChild(host);
-        entry = { host, view: VIEWS[path](host, ctx) };
+        entry = { host, view: VIEWS[path](host, viewContext(ctx, path)) };
         mounted.set(path, entry);
       }
       for (const [p, m] of mounted) {
@@ -349,6 +349,13 @@ function describeIssue(issue) {
   const key = `issue.${issue.code}`;
   const text = t(key, issue.params);
   return text === issue.code || text === key.split('.').pop().replace(/[-_]/g, ' ') ? issue.message : text;
+}
+
+/** The shared context, with a router addressed to one page. See scopedRouter. */
+function viewContext(ctx, path) {
+  const scoped = Object.create(ctx);
+  scoped.router = scopedRouter(ctx.router, path);
+  return scoped;
 }
 
 function buildShell(rootEl) {

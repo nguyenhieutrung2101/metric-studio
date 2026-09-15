@@ -2,6 +2,16 @@ import { createStructureNode, createMetricStructure } from '../core/models/struc
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { ValidationFailure, StaleCascadeError } from './metric-service.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
+import { padNumber } from '../utils/text.js';
+
+/**
+ * Codes are what a file refers to a group by, so a group without one cannot
+ * be exported and read back. The field stays optional to the person filling
+ * the form; what is optional is typing it, not having one.
+ */
+const CODE_PREFIX = 'G.';
+const CODE_WIDTH = 4;
+const CODE_PATTERN = /^G\.(\d+)$/;
 
 /**
  * StructureService — the governance hierarchy and metric placements.
@@ -25,6 +35,16 @@ export class StructureService {
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
+  /** Preview of the next generated code, for a placeholder. The real one is allocated at save time. */
+  nextCode() {
+    let max = 0;
+    for (const n of this.store.list('structureNodes')) {
+      const m = CODE_PATTERN.exec(n.code || '');
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return `${CODE_PREFIX}${padNumber(max + 1, CODE_WIDTH)}`;
+  }
+
   isDescendant(nodeId, ancestorId) {
     let cur = this.store.get('structureNodes', nodeId);
     const seen = new Set();
@@ -43,7 +63,10 @@ export class StructureService {
     if (parentId && !this.store.has('structureNodes', parentId)) throw new NotFoundError('structureNodes', parentId);
     const siblings = this._siblings(parentId);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
-    const node = createStructureNode({ parentId, name: label, code, description, owner, sortOrder });
+    // Allocated inside the repository's write queue, like a metric's code, so
+    // two groups created at once cannot be handed the same number.
+    const assigned = String(code || '').trim() || await this.repo.allocateCode('structureNodes', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
+    const node = createStructureNode({ parentId, name: label, code: assigned, description, owner, sortOrder });
     // The parent this tab can see may already be gone in the database.
     const work = new UnitOfWork().save('structureNodes', node, null).require('structureNodes', parentId);
     const result = await commit(this.repo, this.store, work);

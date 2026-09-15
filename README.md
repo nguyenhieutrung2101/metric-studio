@@ -142,9 +142,13 @@ drawer shows what changed and offers *Reload latest* or an explicit
   importer skips. Codes are the keys: a row whose code exists updates that
   record, the rest are created, blank cells keep the current value and a
   single dash clears it. The preview lists what will be created, updated and
-  removed and names every row that cannot be applied (sheet and row number);
-  nothing is imported until the file is clean, and the plan goes through the
-  same schema boundary and restore point as a JSON backup. *Export to Excel*
+  removed and names every row that cannot be applied (sheet and row number),
+  including a cell holding an Excel error and a sheet whose headings were
+  renamed; nothing is imported until the file is clean. The plan goes through
+  the same schema boundary and restore point as a JSON backup, and then
+  writes only the records the file is about, each against the version it had
+  when you previewed it: what someone else changed meanwhile is kept, and a
+  record you both changed stops the import instead of overwriting theirs. *Export to Excel*
   lets you pick datasets and fields and writes a formatted workbook — cover
   sheet, frozen headers, filters, zebra rows — in the app's own theme.
   Workbooks are written and read by the app itself; there is still no runtime

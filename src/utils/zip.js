@@ -141,6 +141,19 @@ export async function zipWrite(entries, { compress = true, now = new Date() } = 
 }
 
 /**
+ * What a workbook is allowed to unpack to.
+ *
+ * A ZIP says how big each entry will be once inflated, and a small file can
+ * say a very large number. Reading it would be an allocation the person who
+ * opened the file never asked for, so both the claim and the result are
+ * checked against a budget and the file is refused instead.
+ */
+const MAX_ENTRY_BYTES = 64 * 1024 * 1024;
+const MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+
+const mb = (n) => `${Math.round(n / (1024 * 1024))} MB`;
+
+/**
  * @param {Uint8Array} bytes
  * @returns {Promise<Map<string, Uint8Array>>} entry name → contents
  */
@@ -160,10 +173,12 @@ export async function zipRead(bytes) {
   if (count === 0xffff || p === 0xffffffff) throw new Error('ZIP64 archives are not supported');
   const dec = new TextDecoder();
   const out = new Map();
+  let inflated = 0;
   for (let i = 0; i < count; i += 1) {
     if (p + 46 > bytes.length || v.getUint32(p, true) !== 0x02014b50) throw new Error('Corrupt ZIP central directory');
     const method = v.getUint16(p + 10, true);
     const csize = v.getUint32(p + 20, true);
+    const usize = v.getUint32(p + 24, true);
     const nlen = v.getUint16(p + 28, true);
     const xlen = v.getUint16(p + 30, true);
     const clen = v.getUint16(p + 32, true);
@@ -176,10 +191,17 @@ export async function zipRead(bytes) {
     const lxlen = v.getUint16(lho + 28, true);
     const start = lho + 30 + lnlen + lxlen;
     if (start + csize > bytes.length) throw new Error(`Truncated ZIP entry "${name}"`);
+    if (usize > MAX_ENTRY_BYTES) throw new Error(`"${name}" says it unpacks to ${mb(usize)}, more than the ${mb(MAX_ENTRY_BYTES)} a single part may take`);
     const data = bytes.subarray(start, start + csize);
-    if (method === 0) out.set(name, data);
-    else if (method === 8) out.set(name, await inflateRaw(data));
+    let content;
+    if (method === 0) content = data;
+    else if (method === 8) content = await inflateRaw(data);
     else throw new Error(`Unsupported compression method ${method} for "${name}"`);
+    // The header is a claim; the result is the fact. Both are budgeted.
+    inflated += content.length;
+    if (content.length > MAX_ENTRY_BYTES) throw new Error(`"${name}" unpacks to ${mb(content.length)}, more than the ${mb(MAX_ENTRY_BYTES)} a single part may take`);
+    if (inflated > MAX_TOTAL_BYTES) throw new Error(`This file unpacks to more than ${mb(MAX_TOTAL_BYTES)} and was not read`);
+    out.set(name, content);
   }
   return out;
 }

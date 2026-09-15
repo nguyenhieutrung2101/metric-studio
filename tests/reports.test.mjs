@@ -472,3 +472,48 @@ test('the backup boundary makes kind and content agree instead of importing a st
   assert.deepEqual(issues.filter((i) => i.code === 'REPORT_LINK_TO_FOLDER'), []);
   assert.deepEqual(issues.filter((i) => i.code === 'REPORT_PARENT_NOT_FOLDER'), []);
 });
+
+/**
+ * R05. The form lets a person skip the code; the catalogue does not. A record
+ * a workbook cannot name is a record a workbook cannot carry, and the
+ * template is filled from the catalogue, so a gap here only shows up as a
+ * row of errors when the file comes back.
+ */
+test('a group or report created without a code gets one, and the filled template still round-trips', async () => {
+  const ctx = await createContext();
+  const group = await ctx.structure.createNode({ name: 'Nhóm không mã' });
+  const folder = await ctx.reports.create({ name: 'Thư mục không mã', kind: ReportKind.FOLDER });
+  const report = await ctx.reports.create({ parentId: folder.id, name: 'Báo cáo không mã' });
+  assert.match(group.code, /^G\.\d{4}$/);
+  assert.match(folder.code, /^R\.\d{4}$/);
+  assert.match(report.code, /^R\.\d{4}$/);
+  assert.notEqual(folder.code, report.code, 'the sequence moves on');
+  assert.equal(ctx.structure.nextCode(), 'G.0002');
+  assert.equal(ctx.reports.nextCode(), 'R.0003');
+
+  await ctx.structure.placeMetric('m-revenue', group.id);
+  await ctx.reports.linkMetric('m-revenue', report.id);
+
+  const bytes = await buildTemplateWorkbook({ store: ctx.store, language: 'en', includeData: true });
+  const { plan } = await previewExcelImport(bytes, ctx.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.deepEqual(plan.writes, [], 'the catalogue that produced the file is the catalogue the file describes');
+
+  // A code typed by hand is still honoured.
+  const named = await ctx.reports.create({ name: 'Có mã', code: 'RPT.OWN' });
+  assert.equal(named.code, 'RPT.OWN');
+});
+
+test('a record left without a code says why that matters', async () => {
+  const ctx = await createContext();
+  await ctx.repo.saveMany('reports', [{ id: 'r-nocode', parentId: null, kind: 'report', name: 'Không mã', code: '', sortOrder: 9, version: 1 }]);
+  await ctx.repo.saveMany('structureNodes', [{ id: 's-nocode', parentId: null, name: 'Nhóm cũ', code: '', sortOrder: 9, version: 1 }]);
+  ctx.store.hydrate(await ctx.repo.loadAll());
+  const issues = run(ctx);
+  const codes2 = issues.filter((i) => i.code === 'REPORT_MISSING_CODE' || i.code === 'STRUCTURE_MISSING_CODE');
+  assert.equal(codes2.length, 2);
+  assert.deepEqual(codes2.map((i) => i.severity), ['info', 'info']);
+  // The demo catalogue itself has none of these.
+  const clean = await createContext();
+  assert.deepEqual(run(clean).filter((i) => i.code.endsWith('MISSING_CODE')), []);
+});

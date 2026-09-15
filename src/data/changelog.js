@@ -3,9 +3,22 @@
  * Each item carries both languages; the dialog picks the active one.
  * Bump `version` here and in package.json when a build ships.
  */
-export const APP_VERSION = '0.4.0';
+export const APP_VERSION = '0.4.1';
 
 export const CHANGELOG = [
+  {
+    version: '0.4.1',
+    date: '2026-09-15',
+    title: { en: 'An import writes its own rows, and a move asks the database', vi: 'Nhập liệu chỉ ghi dòng của nó, và thao tác chuyển thì hỏi cơ sở dữ liệu' },
+    items: [
+      { en: 'Importing an Excel file now writes only the records that file is about, each against the version it had when you previewed it. What someone else changed in another tab meanwhile is kept instead of being wiped, and a record you both changed stops the import rather than overwriting theirs. The restore point holds their work too.', vi: 'Nhập file Excel giờ chỉ ghi đúng những bản ghi mà file đó nói tới, mỗi bản ghi đối chiếu với phiên bản lúc bạn xem trước. Thay đổi của người khác ở tab bên cạnh được giữ lại thay vì bị xoá, và bản ghi cả hai cùng sửa sẽ dừng lần nhập thay vì đè lên. Điểm khôi phục cũng giữ phần việc của họ.' },
+      { en: 'A cell holding an Excel error, or a sheet whose headings were renamed, is now named and refused. Both used to read as "nothing to do here" and import cleanly while quietly changing nothing.', vi: 'Ô chứa lỗi Excel, hoặc sheet bị đổi tên tiêu đề, giờ được nêu tên và từ chối. Trước đây cả hai đều được hiểu là "không có gì để làm" và nhập thành công trong khi thực ra không đổi gì.' },
+      { en: 'Moving a metric into a group or a report that someone else has just deleted is refused where the data lives, instead of leaving a link pointing at nothing; so is turning a folder into a report while someone else is filling it.', vi: 'Chuyển chỉ tiêu vào nhóm hoặc báo cáo mà người khác vừa xoá sẽ bị từ chối ngay tại nơi lưu dữ liệu, thay vì để lại liên kết trỏ vào hư không; đổi thư mục thành báo cáo trong lúc người khác đang thêm nội dung cũng vậy.' },
+      { en: 'Groups and reports are given a code when you do not type one, so a template filled with your catalogue can always be imported back.', vi: 'Nhóm và báo cáo được cấp mã khi bạn không nhập, nên mẫu điền sẵn danh mục của bạn luôn nhập lại được.' },
+      { en: 'A page you are not looking at no longer edits the address of the page you are.', vi: 'Trang bạn không nhìn vào sẽ không còn sửa địa chỉ của trang bạn đang xem.' },
+      { en: 'A workbook can no longer ask for more memory than it has data: what a file unpacks to and how large a sheet may be are both bounded.', vi: 'File Excel không còn đòi được nhiều bộ nhớ hơn lượng dữ liệu nó có: dung lượng sau giải nén và kích thước một sheet đều có giới hạn.' },
+    ],
+  },
   {
     version: '0.4.0',
     date: '2026-09-15',

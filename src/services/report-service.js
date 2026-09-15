@@ -2,6 +2,12 @@ import { createReport, createMetricReport, ReportKind } from '../core/models/rep
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { ValidationFailure, StaleCascadeError } from './metric-service.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
+import { padNumber } from '../utils/text.js';
+
+/** As for a group: a report a file cannot name is a report a file cannot carry. */
+const CODE_PREFIX = 'R.';
+const CODE_WIDTH = 4;
+const CODE_PATTERN = /^R\.(\d+)$/;
 
 /**
  * ReportService — report folders, reports, and which metrics each report shows.
@@ -29,6 +35,16 @@ export class ReportService {
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
+  /** Preview of the next generated code, for a placeholder. */
+  nextCode() {
+    let max = 0;
+    for (const r of this.store.list('reports')) {
+      const m = CODE_PATTERN.exec(r.code || '');
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return `${CODE_PREFIX}${padNumber(max + 1, CODE_WIDTH)}`;
+  }
+
   isDescendant(id, ancestorId) {
     return isDescendantIn(new Map(this.store.list('reports').map((r) => [r.id, r])), id, ancestorId);
   }
@@ -41,7 +57,8 @@ export class ReportService {
     if (parent && parent.kind !== ReportKind.FOLDER) throw new ValidationFailure('Only a folder can hold reports', 'parentId');
     const siblings = this._siblings(parentId);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
-    const report = createReport({ parentId, kind, name: label, code, description, owner, sortOrder });
+    const assigned = String(code || '').trim() || await this.repo.allocateCode('reports', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
+    const report = createReport({ parentId, kind, name: label, code: assigned, description, owner, sortOrder });
     const work = new UnitOfWork().save('reports', report, null);
     if (parentId) {
       work.require('reports', parentId);
