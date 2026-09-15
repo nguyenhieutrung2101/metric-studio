@@ -22,6 +22,7 @@ export const SKIP_COLUMN = 'Skip';
 export const LIST_SEPARATOR = '; ';
 const FREQUENCIES = ['daily', 'weekly', 'monthly', 'quarterly', 'yearly'];
 const YES_NO = ['yes', 'no'];
+const REPORT_KIND_LIST = ['folder', 'report'];
 
 const L = (en, vi) => ({ en, vi });
 
@@ -63,6 +64,20 @@ export const TEMPLATE_SHEETS = [
     examples: [['KD', 'Kinh doanh', '', 'Sales lead', 'Commercial metrics', 1], ['KD_DT', 'Doanh thu', 'KD', '', 'Revenue group under Kinh doanh', 1]],
   },
   {
+    key: 'reports', name: 'Reports', title: L('Reports', 'Báo cáo'),
+    description: L('Report folders and reports: where metrics are shown. Kind is folder or report; Parent_Code nests an item under a folder. Link metrics with Report_Codes on the Metrics sheet or rows on Report_Metrics.', 'Thư mục và báo cáo: nơi chỉ tiêu được hiển thị. Kind là folder hoặc report; Parent_Code đặt mục dưới một thư mục. Liên kết chỉ tiêu bằng Report_Codes ở sheet Metrics hoặc các dòng ở Report_Metrics.'),
+    columns: [
+      { key: 'Code', required: true, mono: true, hint: L('Unique report code', 'Mã báo cáo duy nhất') },
+      { key: 'Name', required: true, hint: L('Folder or report name', 'Tên thư mục hoặc báo cáo') },
+      { key: 'Kind', list: REPORT_KIND_LIST, hint: L('folder or report (blank = report)', 'folder hoặc report (trống = report)') },
+      { key: 'Parent_Code', mono: true, hint: L('Code of the parent folder, or blank', 'Mã thư mục cha, hoặc để trống') },
+      { key: 'Owner', hint: L('Optional', 'Không bắt buộc') },
+      { key: 'Description', wide: true, hint: L('Optional', 'Không bắt buộc') },
+      { key: 'Sort_Order', numeric: true, hint: L('Number; lower comes first among siblings', 'Số; nhỏ hơn xếp trước trong cùng cấp') },
+    ],
+    examples: [['BOD', 'Board reports', 'folder', '', 'Planning', 'Everything the board reads', 1], ['BOD_M', 'Monthly BOD pack', 'report', 'BOD', 'Planning', 'Revenue, cost, margin and the main operating KPIs', 1]],
+  },
+  {
     key: 'metrics', name: 'Metrics', title: L('Metrics', 'Chỉ tiêu'),
     description: L('One row per metric. Structure_Codes and Dimension_Codes take several codes separated by ";" — the first structure code is the primary placement.', 'Mỗi dòng một chỉ tiêu. Structure_Codes và Dimension_Codes nhận nhiều mã cách nhau bằng ";" — mã cấu trúc đầu tiên là vị trí chính.'),
     columns: [
@@ -76,12 +91,13 @@ export const TEMPLATE_SHEETS = [
       { key: 'Definition', wide: true, hint: L('What the metric measures and how', 'Chỉ tiêu đo gì và đo thế nào') },
       { key: 'Structure_Codes', mono: true, hint: L('Group codes from the Structure sheet, ";"-separated; first = primary. Replaces the current placements when filled.', 'Mã nhóm trong sheet Structure, cách nhau bằng ";"; mã đầu là vị trí chính. Khi điền sẽ thay thế vị trí hiện có.') },
       { key: 'Dimension_Codes', mono: true, hint: L('Dimension codes the metric can be sliced by, ";"-separated. Replaces the current links when filled.', 'Mã chiều mà chỉ tiêu có thể phân tích, cách nhau bằng ";". Khi điền sẽ thay thế liên kết hiện có.') },
+      { key: 'Report_Codes', mono: true, hint: L('Report codes from the Reports sheet (reports, not folders), ";"-separated. Replaces the current report links when filled.', 'Mã báo cáo trong sheet Reports (báo cáo, không phải thư mục), cách nhau bằng ";". Khi điền sẽ thay thế liên kết báo cáo hiện có.') },
     ],
     examples: [
-      ['REVENUE', 'Doanh thu', 'DT; Rev', 'VND', 'approved', 'Sales lead; Finance', 'kpi', 'Net revenue from completed trips in the period, before VAT.', 'KD_DT', 'PRODUCT; CHANNEL'],
-      ['VOLUME', 'Sản lượng', 'SL', '', 'approved', 'Ops lead', '', 'Completed trips in the period.', 'KD', 'PRODUCT'],
-      ['PRICE', 'Giá bình quân', '', 'VND', 'draft', '', '', 'Average fare per completed trip.', 'KD_DT', ''],
-      ['UTILIZATION', 'Hiệu suất sử dụng xe', '', 'PCT', 'draft', 'Fleet', '', 'Trips per vehicle against SOP capacity.', 'KD', ''],
+      ['REVENUE', 'Doanh thu', 'DT; Rev', 'VND', 'approved', 'Sales lead; Finance', 'kpi', 'Net revenue from completed trips in the period, before VAT.', 'KD_DT', 'PRODUCT; CHANNEL', 'BOD_M'],
+      ['VOLUME', 'Sản lượng', 'SL', '', 'approved', 'Ops lead', '', 'Completed trips in the period.', 'KD', 'PRODUCT', 'BOD_M'],
+      ['PRICE', 'Giá bình quân', '', 'VND', 'draft', '', '', 'Average fare per completed trip.', 'KD_DT', '', ''],
+      ['UTILIZATION', 'Hiệu suất sử dụng xe', '', 'PCT', 'draft', 'Fleet', '', 'Trips per vehicle against SOP capacity.', 'KD', '', ''],
     ],
   },
   {
@@ -151,6 +167,17 @@ export const TEMPLATE_SHEETS = [
     ],
     examples: [['REVENUE', 'PRODUCT', 'yes', 2, 'HRC; CRC'], ['REVENUE', 'CHANNEL', 'no', '', '']],
   },
+  {
+    key: 'reportMetrics', name: 'Report_Metrics', title: L('Report contents', 'Nội dung báo cáo'),
+    description: L('One row per metric shown in a report, in the order the report lists them. Report_Codes on the Metrics sheet is enough for a plain link; this sheet adds order and a note, and reads naturally report by report.', 'Mỗi dòng một chỉ tiêu hiển thị trong một báo cáo, theo thứ tự báo cáo liệt kê. Cột Report_Codes ở sheet Metrics đủ cho liên kết đơn giản; sheet này thêm thứ tự và ghi chú, và đọc tự nhiên theo từng báo cáo.'),
+    columns: [
+      { key: 'Report_Code', required: true, mono: true, hint: L('A report code (not a folder)', 'Mã báo cáo (không phải thư mục)') },
+      { key: 'Metric_Code', required: true, mono: true, hint: L('A metric code', 'Mã chỉ tiêu') },
+      { key: 'Sort_Order', numeric: true, hint: L('Number; lower comes first in the report', 'Số; nhỏ hơn xếp trước trong báo cáo') },
+      { key: 'Note', wide: true, hint: L('Optional: how the metric is presented in this report', 'Không bắt buộc: cách trình bày chỉ tiêu trong báo cáo này') },
+    ],
+    examples: [['BOD_M', 'REVENUE', 1, 'Headline number, with YoY'], ['BOD_M', 'VOLUME', 2, '']],
+  },
 ];
 
 export const TEMPLATE_SHEET_BY_KEY = Object.fromEntries(TEMPLATE_SHEETS.map((s) => [s.key, s]));
@@ -194,6 +221,25 @@ export function catalogueRows(store) {
     if (!byMetricDims.has(l.metricId)) byMetricDims.set(l.metricId, []);
     byMetricDims.get(l.metricId).push(dimCode.get(l.dimensionId));
   }
+  const reportCode = new Map(store.list('reports').map((r) => [r.id, r.code || r.name]));
+  const reportName = new Map(store.list('reports').map((r) => [r.id, r.name]));
+  const reportById = new Map(store.list('reports').map((r) => [r.id, r]));
+  const byMetricReports = new Map();
+  for (const l of [...store.list('metricReports')].sort((a, b) => a.sortOrder - b.sortOrder)) {
+    if (!byMetricReports.has(l.metricId)) byMetricReports.set(l.metricId, []);
+    byMetricReports.get(l.metricId).push(reportCode.get(l.reportId));
+  }
+  const reportPath = (id) => {
+    const parts = [];
+    const guard = new Set();
+    let cur = reportById.get(id);
+    while (cur && !guard.has(cur.id)) {
+      guard.add(cur.id);
+      parts.unshift(cur.name || cur.code);
+      cur = cur.parentId ? reportById.get(cur.parentId) : null;
+    }
+    return parts.join(' › ');
+  };
   const unitName = new Map(store.list('units').map((u) => [u.id, u.name]));
   const nodeById = new Map(store.list('structureNodes').map((n) => [n.id, n]));
   const nodePath = (id) => {
@@ -219,8 +265,12 @@ export function catalogueRows(store) {
     structure: [...store.list('structureNodes')].sort((a, b) => a.sortOrder - b.sortOrder || String(a.code).localeCompare(String(b.code))).map((n) => ({ id: n.id, Code: n.code, Name: n.name, Parent_Code: n.parentId ? nodeCode.get(n.parentId) || '' : '', Parent_Name: n.parentId && nodeById.get(n.parentId) ? nodeById.get(n.parentId).name : '', Path: nodePath(n.id), Owner: n.owner, Description: n.description, Sort_Order: n.sortOrder })),
     metrics: store.list('metrics').map((m) => ({
       id: m.id, Code: m.code, Name: m.name, Aliases: join(m.aliases), Unit_Code: m.unitId ? unitCode.get(m.unitId) || '' : '', Unit_Name: m.unitId ? unitName.get(m.unitId) || '' : '', Status: m.status, Owners: join(m.owners), Tags: join(m.tags), Definition: m.definition,
-      Structure_Codes: join(byMetricPlacements.get(m.id)), Structure_Path: primaryNode.has(m.id) ? nodePath(primaryNode.get(m.id)) : '', Dimension_Codes: join(byMetricDims.get(m.id)), Updated_At: m.updatedAt,
+      Structure_Codes: join(byMetricPlacements.get(m.id)), Structure_Path: primaryNode.has(m.id) ? nodePath(primaryNode.get(m.id)) : '', Dimension_Codes: join(byMetricDims.get(m.id)), Report_Codes: join(byMetricReports.get(m.id)), Updated_At: m.updatedAt,
     })).sort(sortCode),
+    reports: [...store.list('reports')].sort((a, b) => reportPath(a.id).localeCompare(reportPath(b.id)) || a.sortOrder - b.sortOrder).map((r) => ({ id: r.id, Code: r.code, Name: r.name, Kind: r.kind, Parent_Code: r.parentId ? reportCode.get(r.parentId) || '' : '', Parent_Name: r.parentId ? reportName.get(r.parentId) || '' : '', Path: reportPath(r.id), Owner: r.owner, Description: r.description, Sort_Order: r.sortOrder })),
+    reportMetrics: store.list('metricReports').map((l) => ({
+      id: l.id, Report_Code: reportCode.get(l.reportId) || '', Report_Name: reportName.get(l.reportId) || '', Report_Path: reportPath(l.reportId), Metric_Code: metricCode.get(l.metricId) || '', Metric_Name: metricName.get(l.metricId) || '', Sort_Order: l.sortOrder, Note: l.note,
+    })).sort((a, b) => String(a.Report_Path).localeCompare(String(b.Report_Path)) || a.Sort_Order - b.Sort_Order || String(a.Metric_Code).localeCompare(String(b.Metric_Code), undefined, { numeric: true })),
     bindings: store.list('bindings').map((b) => ({
       id: b.id, Metric_Code: metricCode.get(b.metricId) || b.metricId, Metric_Name: metricName.get(b.metricId) || '', Scenario_Code: scenarioCode.get(b.scenarioId) || b.scenarioId, Scenario_Name: scenarioName.get(b.scenarioId) || '', Type: b.type,
       Formula: b.type === 'formula' ? b.formulaText : '', Formula_Mode: b.type === 'formula' ? b.formulaMode || 'expression' : '',
@@ -249,7 +299,7 @@ const README = {
     L('Codes are the keys. A row whose code already exists updates that record; any other row creates a new one. Blank cells keep an existing record\'s value.', 'Mã là khoá. Dòng có mã đã tồn tại sẽ cập nhật bản ghi đó; dòng khác sẽ tạo mới. Ô trống giữ nguyên giá trị hiện có.'),
     L('Lists — aliases, owners, tags, structure codes, dimension codes — are separated by ";". To clear a value of an existing record, write a single dash: -', 'Danh sách — tên khác, người phụ trách, nhãn, mã cấu trúc, mã chiều — cách nhau bằng ";". Để xoá một giá trị của bản ghi đã có, ghi một dấu gạch ngang: -'),
     L('References inside formulas are written in brackets: [CODE], [ALIAS] or [Exact name]; another scenario\'s value is [TT:CODE]. A formula that cannot be an expression may be marked text in Formula_Mode: it is allowed, never checked, and always reported as a warning.', 'Tham chiếu trong công thức viết trong ngoặc vuông: [MÃ], [TÊN KHÁC] hoặc [Tên đầy đủ]; giá trị của kịch bản khác là [TT:MÃ]. Công thức không viết được thành biểu thức có thể đánh dấu text ở Formula_Mode: được phép, không kiểm tra, và luôn có cảnh báo.'),
-    L('Sheets are read in this order: Units, Scenarios, Structure, Dimensions, Members, Metrics, Bindings, Metric_Dimensions — so a code defined earlier in the file can be used later in it.', 'Các sheet được đọc theo thứ tự: Units, Scenarios, Structure, Dimensions, Members, Metrics, Bindings, Metric_Dimensions — nên mã định nghĩa ở sheet trước dùng được ở sheet sau.'),
+    L('Sheets are read in this order: Units, Scenarios, Structure, Reports, Dimensions, Members, Metrics, Bindings, Metric_Dimensions, Report_Metrics — so a code defined earlier in the file can be used later in it.', 'Các sheet được đọc theo thứ tự: Units, Scenarios, Structure, Reports, Dimensions, Members, Metrics, Bindings, Metric_Dimensions, Report_Metrics — nên mã định nghĩa ở sheet trước dùng được ở sheet sau.'),
   ],
   sheets: L('Sheets', 'Các sheet'),
   reference: L('Codes already in your catalogue', 'Mã đã có trong danh mục của bạn'),

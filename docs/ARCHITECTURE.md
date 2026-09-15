@@ -164,6 +164,11 @@ Metric {
 StructureNode   { id, parentId|null, code, name, sortOrder, createdAt, updatedAt, version }
 MetricStructure { id, metricId, structureNodeId, isPrimary, createdAt, updatedAt, version }
 
+// Where a metric is shown, as opposed to where it belongs. A folder holds
+// folders and reports; a report holds metrics; nothing else.
+Report          { id, parentId|null, kind: 'folder'|'report', code, name, description, owner, sortOrder, ... }
+MetricReport    { id, metricId, reportId, sortOrder, note, ... }   // unique per (metricId, reportId)
+
 Scenario        { id, code: 'TT'|'GD', name, sortOrder, version }
 
 Binding {

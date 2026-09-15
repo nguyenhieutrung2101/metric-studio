@@ -243,6 +243,14 @@ export class Repository {
   saveScenario(s, expectedToken) { return this.save('scenarios', s, expectedToken); }
   deleteScenario(id, expectedToken) { return this.remove('scenarios', id, expectedToken); }
 
+  listReports() { return this.list('reports'); }
+  saveReport(report, expectedToken) { return this.save('reports', report, expectedToken); }
+  deleteReport(id, expectedToken) { return this.remove('reports', id, expectedToken); }
+
+  listMetricReports() { return this.list('metricReports'); }
+  saveMetricReport(link, expectedToken) { return this.save('metricReports', link, expectedToken); }
+  deleteMetricReport(id, expectedToken) { return this.remove('metricReports', id, expectedToken); }
+
   listUnits() { return this.list('units'); }
   saveUnit(u, expectedToken) { return this.save('units', u, expectedToken); }
   deleteUnit(id, expectedToken) { return this.remove('units', id, expectedToken); }

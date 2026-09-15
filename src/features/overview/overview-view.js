@@ -52,6 +52,7 @@ export function mountOverviewView(container, ctx) {
       h('div', { class: 'ov-tiles' },
         tile(metrics, t('overview.metrics'), { onClick: () => go('metrics') }),
         tile(store.count('structureNodes'), t('overview.groups'), { onClick: () => go('structure') }),
+        tile(store.list('reports').filter((r) => r.kind === 'report').length, t('overview.reports'), { onClick: () => go('structure') }),
         tile(store.count('dimensions'), t('overview.dimensions'), { onClick: () => go('dimensions') }),
         tile(store.count('scenarios'), t('overview.scenarios'), { onClick: () => go('master-data') }),
         tile(store.list('bindings').filter((b) => b.type !== 'none').length, t('overview.bindings'), { onClick: () => go('bindings') }),

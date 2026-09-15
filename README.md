@@ -41,7 +41,8 @@ dimensions to check performance.
 | | Question | Where in the app |
 | --- | --- | --- |
 | **Metric Master** | What is this metric? | Catalogue → Metric Master: one row per metric, immutable id, `M.000123` code; click inspects, double-click edits |
-| **Structural Hierarchy** | Where does it belong for governance? | Structure → Structure: the hierarchy as a workspace of its own (drag, rename, move, inspect); the same tree scopes the Metric Master grid |
+| **Structural Hierarchy** | Where does it belong for governance? | Structure → Structure, left pane: the hierarchy as a workspace of its own (drag, rename, move, inspect); the same tree scopes the Metric Master grid |
+| **Report** | Where is it shown? | Structure → Structure, right pane: report folders and reports; link metrics by picking them or dragging them across from a group; drawer → Structure lists a metric's reports under its groups |
 | **Scenario Binding** | How is the value obtained in each scenario? | Logic → Bindings: one row per metric, one cell per scenario; drawer → Bindings for editing; Source / Formula / Assumption / None |
 | **Dimension** | Along which axes can it be sliced? | Structure → Dimensions: dimension list, member hierarchy, inspector; drawer → Dimensions on the metric |
 | **Dependency Graph** | What does it depend on mathematically? | Logic → Dependencies, derived from Formula bindings, never edited by hand |
@@ -135,8 +136,9 @@ drawer shows what changed and offers *Reload latest* or an explicit
   import.
 * **Excel is a first-class way in and out.** *Import from Excel* offers a
   template — blank, or filled with the current catalogue — with one sheet per
-  kind of record (Units, Scenarios, Structure, Metrics, Bindings, Dimensions,
-  Members, Metric_Dimensions), a hint row and shaded example rows that the
+  kind of record (Units, Scenarios, Structure, Reports, Metrics, Bindings,
+  Dimensions, Members, Metric_Dimensions, Report_Metrics), a hint row and
+  shaded example rows that the
   importer skips. Codes are the keys: a row whose code exists updates that
   record, the rest are created, blank cells keep the current value and a
   single dash clears it. The preview lists what will be created, updated and

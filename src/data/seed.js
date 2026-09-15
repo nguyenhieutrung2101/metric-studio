@@ -1,6 +1,7 @@
 import { createMetric, MetricStatus, MetricRole } from '../core/models/metric.js';
 import { createBinding, BindingType } from '../core/models/binding.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
+import { createReport, createMetricReport } from '../core/models/report.js';
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
 import { defaultScenarios, SCENARIO_TT_ID, SCENARIO_GD_ID } from '../core/models/scenario.js';
 import { createUnit } from '../core/models/unit.js';
@@ -20,6 +21,7 @@ const stamp = (rec) => ({ ...rec, createdAt: T, updatedAt: T, version: 1 });
  *   - GD-only growth assumption
  *   - non-bound draft / deprecated / unplaced metrics
  *   - structural hierarchy with folder-only nodes
+ *   - report folders and reports, with the metrics each one shows
  *   - dimensions with member hierarchies
  *   - formula dependencies and an explicit cross-scenario dependency
  *   - one intentionally missing reference ([DAYS_IN_PERIOD]) so the warning
@@ -252,7 +254,31 @@ export function buildDemoSnapshot() {
   asm('m-growth-rate', GD, '15%', 'Kế hoạch 5 năm đã phê duyệt', { legacyCode: 'GD-GD001' });
   asm('m-cost-growth', GD, '8%', 'Lạm phát + mở rộng đội xe');
 
-  const snapshot = { units, scenarios, metrics, structureNodes: nodes, metricStructures: placements, bindings: [], dimensions, dimensionMembers: members, metricDimensions: links };
+  // ------------------------------------------------------------ reports
+  // Where the metrics are shown: the packs the organisation actually reads.
+  const reports = [];
+  const report = (id, parentId, kind, code, name, sortOrder, owner = '', description = '') => {
+    reports.push(stamp(createReport({ id, parentId, kind, code, name, sortOrder, owner, description })));
+    return id;
+  };
+  report('r-bod', null, 'folder', 'RPT.BOD', 'Báo cáo Ban điều hành', 1, 'Ban Kế hoạch');
+  report('r-bod-m', 'r-bod', 'report', 'RPT.BOD.M', 'BOD tháng', 1, 'Ban Kế hoạch', 'Gói báo cáo tháng cho Ban điều hành: doanh thu, chi phí, biên lợi nhuận và các KPI vận hành chính.');
+  report('r-bod-q', 'r-bod', 'report', 'RPT.BOD.Q', 'BOD quý', 2, 'Ban Kế hoạch', 'Rà soát quý: kết quả so với kế hoạch và các giả định đang dùng.');
+  report('r-ops', null, 'folder', 'RPT.OPS', 'Báo cáo Vận hành', 2, 'Khối Vận hành');
+  report('r-ops-w', 'r-ops', 'report', 'RPT.OPS.W', 'Vận hành tuần', 1, 'Phòng Vận hành', 'Họp giao ban tuần: sản lượng, đội xe, tài xế.');
+  report('r-ops-cs', 'r-ops', 'report', 'RPT.OPS.CS', 'Chất lượng dịch vụ tháng', 2, 'Phòng CSKH');
+  report('r-fin-q', null, 'report', 'RPT.FIN.Q', 'Tài chính quý', 3, 'Khối Tài chính');
+  report('r-hotel-m', null, 'report', 'RPT.KS.M', 'Khách sạn tháng', 4, 'Khối Khách sạn');
+  const reportLinks = [];
+  const show = (reportId, ...metricIds) => metricIds.forEach((metricId, i) => reportLinks.push(stamp(createMetricReport({ id: `mr-${reportId}-${metricId}`, metricId, reportId, sortOrder: i + 1 }))));
+  show('r-bod-m', 'm-revenue', 'm-opex', 'm-margin', 'm-volume', 'm-active-customers', 'm-occupancy');
+  show('r-bod-q', 'm-revenue', 'm-margin', 'm-aov', 'm-growth-rate');
+  show('r-ops-w', 'm-volume', 'm-active-vehicles', 'm-trips-per-vehicle', 'm-vehicle-utilization', 'm-driver-headcount');
+  show('r-ops-cs', 'm-complaints', 'm-complaint-rate');
+  show('r-fin-q', 'm-revenue', 'm-opex', 'm-margin', 'm-cost-growth');
+  show('r-hotel-m', 'm-occupancy', 'm-room-nights-sold', 'm-room-nights-available', 'm-rooms');
+
+  const snapshot = { units, scenarios, metrics, structureNodes: nodes, metricStructures: placements, bindings: [], dimensions, dimensionMembers: members, metricDimensions: links, reports, metricReports: reportLinks };
   snapshot.bindings = resolveSeedBindings(snapshot, raw);
   return snapshot;
 }
@@ -372,7 +398,7 @@ export function buildLargeSnapshot({ metrics: metricCount = 3000, dimensions: di
     }
   }
 
-  const snapshot = { units, scenarios, metrics, structureNodes: nodes, metricStructures: placements, bindings: [], dimensions, dimensionMembers: members, metricDimensions: links };
+  const snapshot = { units, scenarios, metrics, structureNodes: nodes, metricStructures: placements, bindings: [], dimensions, dimensionMembers: members, metricDimensions: links, reports: [], metricReports: [] };
   snapshot.bindings = resolveSeedBindings(snapshot, raw);
   return snapshot;
 }

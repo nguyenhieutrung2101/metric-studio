@@ -213,6 +213,22 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .ws-body.narrow > .side-rail[aria-expanded="true"] .icon { transform: rotate(180deg); }
 .ws-body.narrow > .pane.tree-pane { display: none; position: absolute; left: 34px; top: 0; bottom: 0; width: var(--tree-w); z-index: 6; box-shadow: var(--shadow-2); border-right: 1px solid var(--border); }
 .ws-body.narrow.side-open > .pane.tree-pane { display: flex; }
+/* Structure: the governance hierarchy and the reports side by side, each a hierarchy pane of its own. */
+.structure-main { min-height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); container-type: inline-size; }
+.structure-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); min-height: 0; min-width: 0; }
+.structure-split > .pane { min-width: 0; }
+.structure-split > .pane:first-child { border-right: 1px solid var(--border); }
+@container (max-width: 640px) {
+  .structure-split { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); }
+  .structure-split > .pane:first-child { border-right: none; border-bottom: 1px solid var(--border); }
+}
+.tree-icon-report { color: var(--accent); }
+/* Dimensions: the dimension list is a workspace of its own, not a navigator — it takes half the width the insights leave. */
+.dims-ws .ws-body.has-side:not(.narrow) { grid-template-columns: minmax(280px, calc(50% - 170px)) minmax(0, 1fr); }
+.dims-ws .ws-body.has-side.has-insights:not(.narrow) { grid-template-columns: minmax(280px, calc(50% - 170px)) minmax(0, 1fr) auto; }
+/* Where the main pane starts with a table header, the Insights header shares its line. */
+.ws-table-head .insights-head { height: var(--table-head-h); }
+.ws-table-head .insights-head .btn { height: 24px; }
 /* Hierarchy workspaces: the tree is the main pane, so give rows room to breathe and cap the line length. */
 .hierarchy-pane .hierarchy-scroll { padding: 8px 12px 16px; }
 .hierarchy-pane .empty.small { padding: 40px 16px; }
@@ -297,6 +313,10 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .insight-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .insight-list { display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
 .insight-list li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.drag-list li[draggable="true"] { cursor: grab; }
+.drag-list li.dragging { opacity: 0.5; }
+.drag-list .drag-handle { color: var(--text-3); flex: none; }
+.insight-list .link-remove { margin-left: auto; }
 .insight-list .ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .insight-para { font-size: var(--fs-sm); line-height: 1.5; color: var(--text); margin: 0; }
 

@@ -10,7 +10,7 @@ import { filterBar } from '../../ui/filter/filter-bar.js';
 import { writeFilters, readFilters, filtersDiffer } from '../../ui/workspace/route-state.js';
 
 const SEVERITIES = ['error', 'warning', 'info'];
-const ENTITY_TYPES = ['metric', 'binding', 'structure', 'dimension', 'member', 'metricDimension', 'metricStructure'];
+const ENTITY_TYPES = ['metric', 'binding', 'structure', 'dimension', 'member', 'metricDimension', 'metricStructure', 'report', 'metricReport'];
 const RANK = { error: 0, warning: 1, info: 2 };
 
 /**
@@ -97,6 +97,7 @@ export function mountQualityView(container, ctx) {
     if (type === 'structure') { const n = store.get('structureNodes', id); return n ? n.name : id; }
     if (type === 'dimension') { const d = store.get('dimensions', id); return d ? `${d.code} · ${d.name}` : id; }
     if (type === 'member') { const mem = store.get('dimensionMembers', id); const d = mem && store.get('dimensions', mem.dimensionId); return mem ? `${d ? d.code + ' › ' : ''}${mem.name}` : id; }
+    if (type === 'report') { const r = store.get('reports', id); return r ? `${r.code ? r.code + ' · ' : ''}${r.name}` : id; }
     return id;
   }
 
@@ -114,11 +115,12 @@ export function mountQualityView(container, ctx) {
     if (!issue) return;
     const { type, id } = issue.entity;
     if (issue.metricId && store.has('metrics', issue.metricId)) {
-      const section = type === 'binding' ? 'bindings' : type === 'metricDimension' ? 'dimensions' : issue.code.includes('UNPLACED') ? 'structure' : 'definition';
+      const section = type === 'binding' ? 'bindings' : type === 'metricDimension' ? 'dimensions' : type === 'metricReport' || issue.code.includes('UNPLACED') ? 'structure' : 'definition';
       ctx.openMetric(issue.metricId, { section, scenarioId: issue.scenarioId || null });
       return;
     }
     if (type === 'structure' || issue.structureNodeId) { ctx.router.navigate('structure', { node: issue.structureNodeId || id }); return; }
+    if (type === 'report' || issue.reportId) { ctx.router.navigate('structure', { report: issue.reportId || id }); return; }
     if (type === 'dimension' || type === 'member' || issue.dimensionId) {
       const member = type === 'member' ? id : null;
       const dimId = issue.dimensionId || (type === 'dimension' ? id : (store.get('dimensionMembers', id) || {}).dimensionId);
@@ -162,6 +164,7 @@ export function mountQualityView(container, ctx) {
     const m = issue.metricId ? store.get('metrics', issue.metricId) : null;
     const scn = issue.scenarioId ? store.get('scenarios', issue.scenarioId) : null;
     const node = issue.structureNodeId ? store.get('structureNodes', issue.structureNodeId) : issue.entity.type === 'structure' ? store.get('structureNodes', issue.entity.id) : null;
+    const report = issue.reportId ? store.get('reports', issue.reportId) : issue.entity.type === 'report' ? store.get('reports', issue.entity.id) : null;
     const member = issue.entity.type === 'member' ? store.get('dimensionMembers', issue.entity.id) : null;
     const dimId = issue.dimensionId || (issue.entity.type === 'dimension' ? issue.entity.id : member ? member.dimensionId : null);
     const dim = dimId ? store.get('dimensions', dimId) : null;
@@ -175,9 +178,10 @@ export function mountQualityView(container, ctx) {
         m && insightRow(t('quality.metric'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('metrics', { selected: m.id }) } }, `${m.code} · ${m.name}`)),
         scn && insightRow(t('quality.scenario'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('bindings', { selected: m ? m.id : null, scenario: scn.code }) } }, `${scn.code} · ${scn.name}`)),
         node && insightRow(t('quality.node'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('structure', { node: node.id }) } }, selectors.nodePathLabel(node.id, ' › '))),
+        report && insightRow(t('quality.report'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('structure', { report: report.id }) } }, selectors.reportPathLabel(report.id, ' › '))),
         dim && insightRow(t('quality.dimension'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('dimensions', { dimension: dim.id }) } }, `${dim.code} · ${dim.name}`)),
         member && insightRow(t('quality.member'), h('button', { type: 'button', class: 'link', on: { click: () => ctx.router.navigate('dimensions', { dimension: member.dimensionId, member: member.id }) } }, member.name)),
-        !m && !scn && !node && !dim && !member && h('p', { class: 'insight-para muted', text: entityLabel(issue) }),
+        !m && !scn && !node && !dim && !member && !report && h('p', { class: 'insight-para muted', text: entityLabel(issue) }),
       ),
       h('div', { class: 'insight-actions' },
         btn(t('quality.fix'), { kind: 'primary', size: 'sm', icon: 'arrowRight', on: { click: () => jump(issue) } }),
@@ -208,7 +212,7 @@ export function mountQualityView(container, ctx) {
     renderInsights();
   }
 
-  const layout = workspaceLayout({ header: header.el, main, insights: insights.el, className: 'quality-ws' });
+  const layout = workspaceLayout({ header: header.el, main, insights: insights.el, className: 'quality-ws ws-table-head' });
   layout.el.insertBefore(kpis, layout.body);
   layout.el.insertBefore(filters.el, layout.body);
   container.appendChild(layout.el);

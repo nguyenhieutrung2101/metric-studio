@@ -1,5 +1,6 @@
 export { MetricService, ValidationFailure } from './metric-service.js';
 export { StructureService } from './structure-service.js';
+export { ReportService } from './report-service.js';
 export { BindingService, resolveFormula } from './binding-service.js';
 export { DimensionService } from './dimension-service.js';
 export { DependencyService } from './dependency-service.js';

@@ -29,6 +29,7 @@ const COLUMN_LABELS = {
   Dimension_Code: L('Dimension', 'Chiều'), Dimension_Name: L('Dimension name', 'Tên chiều'), Level: L('Level', 'Cấp'),
   Required: L('Required', 'Bắt buộc'), Max_Level: L('Max level', 'Cấp tối đa'), Allowed_Member_Codes: L('Allowed members', 'Thành phần được phép'),
   Updated_At: L('Updated', 'Cập nhật'),
+  Kind: L('Kind', 'Loại'), Report_Code: L('Report code', 'Mã báo cáo'), Report_Name: L('Report', 'Báo cáo'), Report_Path: L('Report path', 'Đường dẫn báo cáo'), Report_Codes: L('Reports', 'Báo cáo'),
 };
 
 const EXTRA_FIELDS = {
@@ -37,6 +38,8 @@ const EXTRA_FIELDS = {
   structure: [{ key: 'Parent_Name' }, { key: 'Path', wide: true }],
   members: [{ key: 'Dimension_Name' }, { key: 'Level', numeric: true }],
   metricDimensions: [{ key: 'Metric_Name' }, { key: 'Dimension_Name' }],
+  reports: [{ key: 'Parent_Name' }, { key: 'Path', wide: true }],
+  reportMetrics: [{ key: 'Report_Name' }, { key: 'Report_Path', wide: true }, { key: 'Metric_Name' }],
   dimensions: [],
   units: [],
   scenarios: [],
@@ -59,7 +62,7 @@ function orderedFields(spec) {
 const SEVERITY_STYLE = { error: 'bad', warning: 'warn', info: 'zebra' };
 
 export const EXPORT_DATASETS = [
-  ...['metrics', 'bindings', 'structure', 'dimensions', 'members', 'metricDimensions', 'units', 'scenarios'].map((key) => {
+  ...['metrics', 'bindings', 'structure', 'reports', 'reportMetrics', 'dimensions', 'members', 'metricDimensions', 'units', 'scenarios'].map((key) => {
     const spec = TEMPLATE_SHEETS.find((s) => s.key === key);
     return { key, label: spec.title, description: spec.description, fields: orderedFields(spec), rows: (src) => src.catalogue[key] };
   }),
@@ -113,7 +116,7 @@ const COVER = {
   quality: L('Quality', 'Chất lượng'),
   severity: { error: L('errors', 'lỗi'), warning: L('warnings', 'cảnh báo'), info: L('notes', 'ghi chú') },
   counts: {
-    metrics: L('metrics', 'chỉ tiêu'), bindings: L('bindings', 'gắn kịch bản'), structureNodes: L('structure groups', 'nhóm cấu trúc'),
+    metrics: L('metrics', 'chỉ tiêu'), bindings: L('bindings', 'gắn kịch bản'), structureNodes: L('structure groups', 'nhóm cấu trúc'), reports: L('reports and folders', 'báo cáo và thư mục'),
     dimensions: L('dimensions', 'chiều phân tích'), dimensionMembers: L('dimension members', 'thành phần chiều'), scenarios: L('scenarios', 'kịch bản'), units: L('units', 'đơn vị'),
   },
 };

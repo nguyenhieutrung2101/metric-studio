@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContext, TT, GD } from './_setup.mjs';
+import { DB_VERSION } from '../src/repositories/local-repository.js';
 import { freshFactory, freshDbName, openRepo, openTab, reload, rawOpen, rawDone, rawAll } from './_idb.mjs';
 import { MemoryRepository } from '../src/repositories/memory-repository.js';
 import { PartialBatchError, StorageUnavailableError, COLLECTIONS, tokenOf } from '../src/repositories/repository.js';
@@ -174,7 +175,7 @@ test('D03: a v3 database with a legacy owner opens with owners and keeps the own
 
   // The reported repro: edit only the name, save, reopen.
   await tab.metrics.update('m-1', { name: 'Doanh thu thuần' }, tokenOf(m1));
-  const stored = await rawAll(await rawOpen(factory, dbName, 4), 'metrics');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metrics');
   assert.deepEqual(stored.find((m) => m.id === 'm-1').owners, ['Alice', 'Bob'], 'the owner survived the unrelated edit');
   tab.repo.close();
 });
@@ -233,7 +234,7 @@ test('D05: creating a member for a dimension another tab deleted is refused wher
   const dim = a.store.list('dimensions')[0];
   await b.dimensions.deleteDimension(dim.id);
   await assert.rejects(() => a.dimensions.createMember({ dimensionId: dim.id, name: 'Orphan' }), (e) => e.name === 'NotFoundError');
-  const stored = await rawAll(await rawOpen(factory, dbName, 4), 'dimensionMembers');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'dimensionMembers');
   assert.equal(stored.some((m) => m.dimensionId === dim.id), false, 'no orphan member on disk');
   a.repo.close(); b.repo.close();
 });
@@ -247,7 +248,7 @@ test('D05: a stale dimension delete does not leave a member another tab just add
   const added = await b.dimensions.createMember({ dimensionId: dim.id, name: 'Mới thêm' });
   // Tab A does not know about the new member; the guard does.
   await a.dimensions.deleteDimension(dim.id);
-  const stored = await rawAll(await rawOpen(factory, dbName, 4), 'dimensionMembers');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'dimensionMembers');
   assert.equal(stored.some((m) => m.id === added.id), false, 'the retry collected the member the plan had missed');
   assert.equal(stored.some((m) => m.dimensionId === dim.id), false);
   a.repo.close(); b.repo.close();
@@ -262,7 +263,7 @@ test('D05: a stale structure-node delete re-homes the sub-node another tab just 
   const child = a.selectors.structureTree().roots[0].children[0].node;
   const fresh = await b.structure.createNode({ parentId: child.id, name: 'Nhóm mới từ tab B' });
   await a.structure.deleteNode(child.id, { strategy: 'moveToParent' });
-  const nodes = await rawAll(await rawOpen(factory, dbName, 4), 'structureNodes');
+  const nodes = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'structureNodes');
   const moved = nodes.find((n) => n.id === fresh.id);
   assert.ok(moved, 'the new node still exists');
   assert.equal(moved.parentId, root.id, 'and now hangs from the deleted node\'s parent, not from a node that is gone');
@@ -281,7 +282,7 @@ test('D05: opposing member moves in two tabs cannot form a cycle', async () => {
   await a.dimensions.moveMember(x.id, y.id); // X under Y
   // Tab B still thinks both are roots: moving Y under X looks fine to it.
   await assert.rejects(() => b.dimensions.moveMember(y.id, x.id), (e) => e.name === 'ValidationFailure' || e.name === 'StaleCascadeError');
-  const members = await rawAll(await rawOpen(factory, dbName, 4), 'dimensionMembers');
+  const members = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'dimensionMembers');
   const byId = new Map(members.map((m) => [m.id, m]));
   let cur = byId.get(x.id);
   const seen = new Set();
@@ -299,7 +300,7 @@ test('D05: deleting a member re-homes a child another tab added meanwhile', asyn
   await reload(b);
   const child = await b.dimensions.createMember({ dimensionId: dim.id, parentId: parent.id, name: 'Con từ tab B' });
   await a.dimensions.deleteMember(parent.id, { strategy: 'moveToParent' });
-  const members = await rawAll(await rawOpen(factory, dbName, 4), 'dimensionMembers');
+  const members = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'dimensionMembers');
   const kid = members.find((m) => m.id === child.id);
   assert.ok(kid, 'the child survives');
   assert.equal(kid.parentId, null, 'and moved up to the deleted member\'s parent (root)');
@@ -316,7 +317,7 @@ test('D06: two tabs creating a metric with the same manual code: the second is r
   const b = await openTab(factory, dbName);
   await a.metrics.create({ name: 'Một', code: 'KPI.001' });
   await assert.rejects(() => b.metrics.create({ name: 'Hai', code: 'kpi.001' }), (e) => e.name === 'ValidationFailure' && e.field === 'code');
-  const stored = await rawAll(await rawOpen(factory, dbName, 4), 'metrics');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metrics');
   assert.equal(stored.filter((m) => m.code.toUpperCase() === 'KPI.001').length, 1);
   a.repo.close(); b.repo.close();
 });
