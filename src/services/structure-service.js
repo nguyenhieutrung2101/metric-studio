@@ -1,6 +1,7 @@
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
-import { ValidationFailure, StaleCascadeError } from './metric-service.js';
+import { ValidationFailure, StaleCascadeError } from './errors.js';
+import { guardLinkStillPoints } from './invariants.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 import { padNumber } from '../utils/text.js';
 
@@ -78,6 +79,10 @@ export class StructureService {
     if (!existing) throw new NotFoundError('structureNodes', id);
     const merged = createStructureNode({ ...existing, ...patch, id, createdAt: existing.createdAt, parentId: existing.parentId, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
+    // Having a code is the invariant; typing one is the option. Clearing the
+    // field keeps the code the group already had, and a group from before
+    // codes were allocated gets one here — the only place a person edits it.
+    if (!merged.code) merged.code = existing.code || await this.repo.allocateCode('structureNodes', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
     const saved = await this.repo.saveStructure(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
     this.store.upsert('structureNodes', saved);
     return saved;
@@ -304,7 +309,7 @@ export class StructureService {
       if (already) {
         movedId = already.id;
         if (!source) return work;
-        work.require('metricStructures', already.id);
+        guardLinkStillPoints(work, 'metricStructures', already, 'structureNodeId');
         work.remove('metricStructures', source.id, tokenOf(source));
         // A metric keeps exactly one primary placement.
         if (source.isPrimary && !already.isPrimary) work.save('metricStructures', { ...already, isPrimary: true }, tokenOf(already));

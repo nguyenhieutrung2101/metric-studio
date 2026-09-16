@@ -1,6 +1,6 @@
 import { COLLECTIONS, SCHEMA_VERSION } from '../core/collections.js';
 import { parseSnapshot, APP_ID } from './snapshot-schema.js';
-import { commit } from './unit-of-work.js';
+import { commit, UnitOfWork } from './unit-of-work.js';
 
 /**
  * BackupService — JSON export, validated import, and the restore points that
@@ -120,15 +120,31 @@ export class BackupService {
    *
    * @returns {Promise<{changed, restorePoint, restorePointError}>}
    */
-  async applyChanges(writes, { label = 'Before import' } = {}) {
-    if (!Array.isArray(writes)) throw new Error('A change set is required');
-    if (!writes.length) return { changed: 0, restorePoint: null, restorePointError: null };
+  async applyChanges(work, { label = 'Before import' } = {}) {
+    const ops = work instanceof UnitOfWork ? work.ops : work;
+    if (!Array.isArray(ops)) throw new Error('A change set is required');
+    if (!ops.length) return { changed: 0, restorePoint: null, restorePointError: null };
     // A restore point is supposed to hold the catalogue as it is, not as this
     // tab last saw it, so whatever other tabs wrote is read back first.
     if (typeof this.repo.refresh === 'function') await this.repo.refresh();
     const { point, error } = await this._createRestorePoint(label);
-    await commit(this.repo, this.store, writes);
-    return { changed: writes.length, restorePoint: point, restorePointError: error };
+    try {
+      await commit(this.repo, this.store, work);
+    } catch (err) {
+      // The plan was built on a catalogue that has moved, and this tab is
+      // now the one holding the old story. Reading it back is what makes
+      // "try again" mean something: planning from the same stale mirror
+      // would fail on the same tokens for ever.
+      await this.reload();
+      throw err;
+    }
+    return { changed: ops.length, restorePoint: point, restorePointError: error };
+  }
+
+  /** Catch up with what other tabs wrote: the repository first, then the store. */
+  async reload() {
+    if (typeof this.repo.refresh === 'function') await this.repo.refresh();
+    this.store.hydrate(await this.repo.loadAll());
   }
 
   // ------------------------------------------------------------ restore points

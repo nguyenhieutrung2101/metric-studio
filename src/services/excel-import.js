@@ -28,6 +28,8 @@
 
 import { COLLECTIONS } from '../core/collections.js';
 import { tokenOf } from '../repositories/repository.js';
+import { UnitOfWork } from './unit-of-work.js';
+import { requireReferences, assertReportKindFits, assertLinkTarget, reportKindFits } from './invariants.js';
 import { createUnit } from '../core/models/unit.js';
 import { createScenario, isValidScenarioCode } from '../core/models/scenario.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
@@ -630,8 +632,9 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       // this import's: a pre-existing problem must not refuse the file.
       if (row === undefined) continue;
       const label = r.code || r.name;
-      if (r.kind === ReportKind.FOLDER && links.get(r.id)) err(spec, row, `"${label}" still shows ${links.get(r.id)} metric(s); a folder cannot show metrics`);
-      if (r.kind === ReportKind.REPORT && children.get(r.id)) err(spec, row, `"${label}" still holds ${children.get(r.id)} sub-item(s); a report cannot hold sub-items`);
+      if (reportKindFits(r.kind, children.get(r.id) || 0, links.get(r.id) || 0)) continue;
+      if (r.kind === ReportKind.FOLDER) err(spec, row, `"${label}" still shows ${links.get(r.id)} metric(s); a folder cannot show metrics`);
+      else err(spec, row, `"${label}" still holds ${children.get(r.id)} sub-item(s); a report cannot hold sub-items`);
     }
   }
 
@@ -653,8 +656,8 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   // The same boundary a JSON backup passes: the plan only builds the file.
   const parsed = parseSnapshot(snapshot);
   if (!parsed.ok) for (const e of parsed.errors) errors.push({ sheet: '', row: 0, message: e });
-  const writes = parsed.ok ? changeSet(before, parsed.data) : [];
-  return { ok: parsed.ok, errors, warnings, changes: summarize(), snapshot, parsed, writes, rowsRead, sheetsFound };
+  const work = parsed.ok ? changeSet(before, parsed.data) : new UnitOfWork();
+  return { ok: parsed.ok, errors, warnings, changes: summarize(), snapshot, parsed, work, writes: work.ops, rowsRead, sheetsFound };
 
   // ---------------------------------------------------------------- helpers bound to this plan
   function touch(rec, collection) {
@@ -767,7 +770,52 @@ function changeSet(before, data) {
     for (const [id, prev] of before[c]) if (!kept.has(id)) removes.push({ op: 'remove', collection: c, id, expectedToken: tokenOf(prev) });
   }
   removes.reverse();
-  return [...removes, ...saves];
+  const work = new UnitOfWork();
+  for (const op of removes) work.remove(op.collection, op.id, op.expectedToken);
+  for (const op of saves) work.save(op.collection, op.record, op.expectedToken);
+  // A token says a record has not changed. It says nothing about the records
+  // that record names, and an upsert is mostly records naming other records.
+  requireReferences(work, saves);
+  guardReportKinds(work, data, saves, removes);
+  return work;
+}
+
+/**
+ * What an item holds decides what it may be, re-asked where the data lives.
+ *
+ * The file's own contents were checked against each other when the plan was
+ * made, and against the catalogue as it was then. Between that moment and
+ * this one another tab may have put a report inside an item this file turns
+ * into a report, or linked a metric to one it turns into a folder. Those
+ * records are exactly the ones the plan knows nothing about, so they are the
+ * ones the guard looks for: everything the batch itself writes or removes is
+ * already accounted for.
+ */
+function guardReportKinds(work, data, saves, removes) {
+  const savedReports = new Set(saves.filter((o) => o.collection === 'reports').map((o) => o.record.id));
+  const removedReports = new Set(removes.filter((o) => o.collection === 'reports').map((o) => o.id));
+  const savedLinks = new Set(saves.filter((o) => o.collection === 'metricReports').map((o) => o.record.id));
+  const removedLinks = new Set(removes.filter((o) => o.collection === 'metricReports').map((o) => o.id));
+  const kindOf = new Map(data.reports.map((r) => [r.id, r.kind]));
+  // Reports this file hangs a new link on without defining them itself.
+  const linkTargets = new Set();
+  for (const o of saves) if (o.collection === 'metricReports' && !savedReports.has(o.record.reportId)) linkTargets.add(o.record.reportId);
+  if (!savedReports.size && !linkTargets.size) return;
+  work.guard('reports', (stored) => {
+    const byId = new Map(stored.map((r) => [r.id, r]));
+    for (const id of linkTargets) assertLinkTarget(byId.get(id));
+    for (const id of savedReports) {
+      const unknown = stored.filter((r) => r.parentId === id && !savedReports.has(r.id) && !removedReports.has(r.id));
+      assertReportKindFits(kindOf.get(id), unknown, []);
+    }
+  });
+  if (!savedReports.size) return;
+  work.guard('metricReports', (stored) => {
+    for (const id of savedReports) {
+      const unknown = stored.filter((l) => l.reportId === id && !savedLinks.has(l.id) && !removedLinks.has(l.id));
+      assertReportKindFits(kindOf.get(id), [], unknown);
+    }
+  });
 }
 
 /** A text field: undefined when the cell was blank (keep), '' when it said CLEAR. */
@@ -821,7 +869,7 @@ export async function previewExcelImport(bytes, store) {
  * planned on. A catalogue that moved underneath fails the whole batch.
  */
 export async function applyExcelImport(plan, backup, { label = 'Before Excel import' } = {}) {
-  if (!plan || !plan.ok || !plan.writes) throw new Error('The Excel import plan has errors; nothing was imported');
-  const result = await backup.applyChanges(plan.writes, { label });
+  if (!plan || !plan.ok || !plan.work) throw new Error('The Excel import plan has errors; nothing was imported');
+  const result = await backup.applyChanges(plan.work, { label });
   return { ...result, counts: plan.parsed.counts, repairs: plan.parsed.repairs };
 }
