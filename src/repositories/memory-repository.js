@@ -113,8 +113,23 @@ export class MemoryRepository extends Repository {
     return this._serialize(() => this._saveManyNow(collection, records));
   }
 
-  replaceAll(snapshot) {
-    return this._serialize(() => this._replaceAllNow(snapshot));
+  replaceAll(snapshot, options) {
+    return this._serialize(async () => (await this._replaceAllNow(snapshot, options)).snapshot);
+  }
+
+  /**
+   * Replace everything, and take a restore point of what is there now as part
+   * of the same operation.
+   *
+   * Reading the catalogue, writing the backup and replacing the data are one
+   * thing or they are nothing: done separately, a write that lands between
+   * the reading and the replacing survives the import and is missing from
+   * the backup, so undoing the import deletes it.
+   *
+   * @returns {Promise<{snapshot: object, restorePoint: object|null}>}
+   */
+  replaceAllWithRestorePoint(snapshot, label) {
+    return this._serialize(() => this._replaceAllNow(snapshot, { restorePoint: label }));
   }
 
   clear() {
@@ -185,7 +200,7 @@ export class MemoryRepository extends Repository {
   }
 
   // ------------------------------------------------------------ batch
-  async _applyBatchNow(ops, { guards = [], requires = [] } = {}) {
+  async _applyBatchNow(ops, { guards = [], requires = [], restorePoint = null } = {}) {
     if (!Array.isArray(ops)) throw new Error('applyBatch expects an array of operations');
     // Fail fast against what this instance knows; the adapter re-runs the
     // same guards and requirements against the durable store, which is the
@@ -240,10 +255,13 @@ export class MemoryRepository extends Repository {
       if (!plan) continue;
       ordered.push(op.op === 'remove' ? { kind: 'delete', ...plan } : { kind: 'put', ...plan });
     }
-    await this._commit({ puts, deletes, ops: ordered, guards, requires });
+    const meta = restorePoint == null ? null : this._newRestorePointMeta(restorePoint);
+    const committed = await this._commit({ puts, deletes, ops: ordered, guards, requires, restorePoint: meta });
+    const point = meta ? await this._keepRestorePoint(meta, committed) : null;
     for (const p of puts) this._data[p.collection].set(p.record.id, p.record);
     for (const d of deletes) this._data[d.collection].delete(d.id);
     return {
+      restorePoint: point,
       saved: puts.map((p) => ({ collection: p.collection, record: clone(p.record) })),
       // Records that were already absent are reported as removed too: after
       // this call they are gone, which is all the caller needs to know.
@@ -261,7 +279,7 @@ export class MemoryRepository extends Repository {
     return prepared.map((p) => clone(p.record));
   }
 
-  async _replaceAllNow(snapshot) {
+  async _replaceAllNow(snapshot, { restorePoint = null } = {}) {
     // The catalogue is about to be someone else's; codes must be re-derived
     // from it rather than carried over from the one being replaced.
     this._sequences.clear();
@@ -270,13 +288,17 @@ export class MemoryRepository extends Repository {
       assertCollection(c);
       puts.push(...this._prepareBulk(c, snapshot[c] || []));
     }
-    // One commit for clear + every insert: a failure keeps the old data.
-    await this._commit({ clearAll: true, puts });
+    // One commit for the restore point, the clear and every insert: a failure
+    // keeps the old data, and a success cannot leave a backup that is missing
+    // what was there a moment before it.
+    const meta = restorePoint == null ? null : this._newRestorePointMeta(restorePoint);
+    const committed = await this._commit({ clearAll: true, puts, restorePoint: meta });
+    const point = meta ? await this._keepRestorePoint(meta, committed) : null;
     for (const c of COLLECTIONS) this._data[c] = new Map();
     for (const p of puts) this._data[p.collection].set(p.record.id, p.record);
     const out = {};
     for (const c of COLLECTIONS) out[c] = [...this._data[c].values()].map(clone);
-    return out;
+    return { snapshot: out, restorePoint: point };
   }
 
   async _clearNow() {
@@ -321,21 +343,54 @@ export class MemoryRepository extends Repository {
     return [...this._restorePoints.values()].sort((a, b) => (b.seq || 0) - (a.seq || 0) || b.createdAt.localeCompare(a.createdAt));
   }
 
-  async _createRestorePointNow(label = '', { max = 3 } = {}) {
-    const data = await this.loadAll();
+  /** Identity and label of a point, before it is known what it will hold. */
+  _newRestorePointMeta(label = '') {
+    this._restoreSeq += 1;
+    return { id: `rp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, seq: this._restoreSeq, label: String(label || ''), createdAt: new Date().toISOString() };
+  }
+
+  /** A point over a set of records, or null when there is nothing to keep. */
+  _restorePointOf(meta, data) {
     const counts = {};
     let total = 0;
     for (const c of COLLECTIONS) {
-      counts[c] = data[c].length;
-      total += data[c].length;
+      counts[c] = (data[c] || []).length;
+      total += counts[c];
     }
     if (total === 0) return null;
-    this._restoreSeq += 1;
-    const point = { id: `rp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`, seq: this._restoreSeq, label: String(label || ''), createdAt: new Date().toISOString(), counts, data };
+    return { ...meta, counts, data };
+  }
+
+  /** This adapter's records are its own memory, so that is what a point holds. */
+  _currentData() {
+    const out = {};
+    for (const c of COLLECTIONS) out[c] = [...this._data[c].values()].map(clone);
+    return out;
+  }
+
+  /**
+   * File the point the write just took.
+   *
+   * An adapter whose data lives elsewhere reads it inside the transaction
+   * that writes and hands it back here, because only that reading is the
+   * state immediately before the change. This one's data is its own, and the
+   * write queue means nothing has moved since the plan was made.
+   */
+  async _keepRestorePoint(meta, committed) {
+    const point = (committed && committed.restorePoint) || this._restorePointOf(meta, this._currentData());
+    if (!point) return null;
+    this._restorePoints.set(point.id, point);
+    await this._pruneRestorePoints(3);
+    return { id: point.id, seq: point.seq, label: point.label, createdAt: point.createdAt, counts: point.counts };
+  }
+
+  async _createRestorePointNow(label = '', { max = 3 } = {}) {
+    const point = this._restorePointOf(this._newRestorePointMeta(label), await this.loadAll());
+    if (!point) return null;
     await this._commitRestorePoint(point);
     this._restorePoints.set(point.id, point);
     await this._pruneRestorePoints(max);
-    return { id: point.id, seq: point.seq, label: point.label, createdAt: point.createdAt, counts };
+    return { id: point.id, seq: point.seq, label: point.label, createdAt: point.createdAt, counts: point.counts };
   }
 
   async getRestorePoint(id) {

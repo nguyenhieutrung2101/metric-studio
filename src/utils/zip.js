@@ -41,9 +41,38 @@ export async function deflateRaw(bytes) {
   }
 }
 
-export async function inflateRaw(bytes) {
+/**
+ * Raw inflate, with a ceiling it stops at rather than reports on.
+ *
+ * A budget checked after the fact is not a budget: by the time the length of
+ * the result can be measured, the memory has already been taken, and a
+ * header that understates its entry is exactly the case a budget is for. The
+ * stream is therefore read a chunk at a time and cancelled on the chunk that
+ * crosses the line, so what a lying file costs is one chunk, not its whole
+ * claim.
+ */
+export async function inflateRaw(bytes, { limit = Infinity, what = 'This part' } = {}) {
   if (typeof globalThis.DecompressionStream !== 'function') throw new Error('This browser cannot read compressed workbooks (DecompressionStream is unavailable)');
-  return throughStream(bytes, globalThis.DecompressionStream, 'deflate-raw');
+  const reader = new Blob([bytes]).stream().pipeThrough(new globalThis.DecompressionStream('deflate-raw')).getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    let step;
+    try {
+      step = await reader.read();
+    } catch (err) {
+      await reader.cancel().catch(() => {});
+      throw err;
+    }
+    if (step.done) break;
+    total += step.value.length;
+    if (total > limit) {
+      await reader.cancel().catch(() => {});
+      throw new Error(`${what} unpacks to more than ${mb(limit)} and was not read`);
+    }
+    chunks.push(step.value);
+  }
+  return chunks.length === 1 ? chunks[0] : concat(chunks);
 }
 
 function dosDateTime(d) {
@@ -191,16 +220,19 @@ export async function zipRead(bytes) {
     const lxlen = v.getUint16(lho + 28, true);
     const start = lho + 30 + lnlen + lxlen;
     if (start + csize > bytes.length) throw new Error(`Truncated ZIP entry "${name}"`);
+    // The header is a claim, refused on its own terms before anything is read.
     if (usize > MAX_ENTRY_BYTES) throw new Error(`"${name}" says it unpacks to ${mb(usize)}, more than the ${mb(MAX_ENTRY_BYTES)} a single part may take`);
     const data = bytes.subarray(start, start + csize);
+    // What is left of the file's budget is what this part may actually take,
+    // whatever its header said.
+    const room = Math.min(MAX_ENTRY_BYTES, MAX_TOTAL_BYTES - inflated);
     let content;
-    if (method === 0) content = data;
-    else if (method === 8) content = await inflateRaw(data);
+    if (method === 0) {
+      if (data.length > room) throw new Error(`"${name}" unpacks to more than ${mb(room)} and was not read`);
+      content = data;
+    } else if (method === 8) content = await inflateRaw(data, { limit: room, what: `"${name}"` });
     else throw new Error(`Unsupported compression method ${method} for "${name}"`);
-    // The header is a claim; the result is the fact. Both are budgeted.
     inflated += content.length;
-    if (content.length > MAX_ENTRY_BYTES) throw new Error(`"${name}" unpacks to ${mb(content.length)}, more than the ${mb(MAX_ENTRY_BYTES)} a single part may take`);
-    if (inflated > MAX_TOTAL_BYTES) throw new Error(`This file unpacks to more than ${mb(MAX_TOTAL_BYTES)} and was not read`);
     out.set(name, content);
   }
   return out;
