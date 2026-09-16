@@ -340,7 +340,7 @@ export function mountStructureView(container, ctx) {
     const node = await promptDialog({
       title: parent ? t('mm.addSubNodeTitle', { name: parent.name }) : t('mm.addRootNode'),
       confirmLabel: t('common.create'),
-      fields: [{ name: 'name', label: t('mm.nodeName'), placeholder: t('mm.nodeNamePlaceholder'), required: true }, { name: 'code', label: t('mm.nodeCode'), placeholder: 'VH.DV' }, { name: 'owner', label: t('metric.field.owner') }],
+      fields: [{ name: 'name', label: t('mm.nodeName'), placeholder: t('mm.nodeNamePlaceholder'), required: true }, { name: 'code', label: t('mm.nodeCode'), placeholder: services.structure.nextCode() }, { name: 'owner', label: t('metric.field.owner') }],
       submit: (values) => services.structure.createNode({ parentId, name: values.name, code: values.code, owner: values.owner }),
     });
     if (!node) return;
@@ -419,7 +419,7 @@ export function mountStructureView(container, ctx) {
       confirmLabel: t('common.create'),
       fields: [
         { name: 'name', label: t(folder ? 'reports.folderName' : 'reports.reportName'), placeholder: t(folder ? 'reports.folderPlaceholder' : 'reports.reportPlaceholder'), required: true },
-        { name: 'code', label: t('reports.code'), placeholder: folder ? 'RPT.BOD' : 'RPT.BOD.M' },
+        { name: 'code', label: t('reports.code'), placeholder: services.reports.nextCode() },
         { name: 'owner', label: t('metric.field.owner') },
         { name: 'description', label: t('metric.field.definition') },
       ],

@@ -88,6 +88,10 @@ function validateStructure(store, selectors, add) {
     if (entry && entry.orphanCycle) add(Severity.ERROR, 'STRUCTURE_CYCLE', entity, `Structure node "${n.name}" is part of a parent cycle`, { structureNodeId: n.id, params });
     if (n.parentId && !store.has('structureNodes', n.parentId)) add(Severity.ERROR, 'STRUCTURE_ORPHAN', entity, `Structure node "${n.name}" references a missing parent`, { structureNodeId: n.id, params });
     if (!n.name) add(Severity.WARNING, 'STRUCTURE_MISSING_NAME', entity, 'Structure node has no name', { structureNodeId: n.id, params });
+    // Codes are what a workbook refers to a group by. One without a code
+    // cannot be exported and read back, which is a thing to know before the
+    // import says so row by row.
+    if (!n.code) add(Severity.INFO, 'STRUCTURE_MISSING_CODE', entity, `Group "${n.name}" has no code, so an Excel file cannot refer to it`, { structureNodeId: n.id, params });
     const dup = codes.get(referenceKey(n.code));
     if (dup && dup.length > 1) add(Severity.WARNING, 'STRUCTURE_DUPLICATE_CODE', entity, `Duplicate structure code "${n.code}"`, { structureNodeId: n.id, params });
   }
@@ -272,6 +276,7 @@ function validateReports(store, selectors, add) {
       if (parent.kind !== ReportKind.FOLDER) add(Severity.WARNING, 'REPORT_PARENT_NOT_FOLDER', entity, `"${r.name}" sits under "${parent.name}", which is a report, not a folder`, { reportId: r.id, params: { ...params, parent: parent.name } });
     }
     if (!r.name) add(Severity.WARNING, 'REPORT_MISSING_NAME', entity, 'A report item has no name', { reportId: r.id, params });
+    if (!r.code) add(Severity.INFO, 'REPORT_MISSING_CODE', entity, `"${r.name}" has no code, so an Excel file cannot refer to it`, { reportId: r.id, params });
     const dup = codes.get(referenceKey(r.code));
     if (dup && dup.length > 1) add(Severity.WARNING, 'REPORT_DUPLICATE_CODE', entity, `Duplicate report code "${r.code}"`, { reportId: r.id, params });
     if (r.kind === ReportKind.REPORT && selectors.metricIdsInReport(r.id).size === 0) add(Severity.INFO, 'REPORT_EMPTY', entity, `Report "${r.name}" shows no metric yet`, { reportId: r.id, params });

@@ -2,6 +2,16 @@ import { createStructureNode, createMetricStructure } from '../core/models/struc
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { ValidationFailure, StaleCascadeError } from './metric-service.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
+import { padNumber } from '../utils/text.js';
+
+/**
+ * Codes are what a file refers to a group by, so a group without one cannot
+ * be exported and read back. The field stays optional to the person filling
+ * the form; what is optional is typing it, not having one.
+ */
+const CODE_PREFIX = 'G.';
+const CODE_WIDTH = 4;
+const CODE_PATTERN = /^G\.(\d+)$/;
 
 /**
  * StructureService — the governance hierarchy and metric placements.
@@ -25,6 +35,16 @@ export class StructureService {
       .sort((a, b) => a.sortOrder - b.sortOrder);
   }
 
+  /** Preview of the next generated code, for a placeholder. The real one is allocated at save time. */
+  nextCode() {
+    let max = 0;
+    for (const n of this.store.list('structureNodes')) {
+      const m = CODE_PATTERN.exec(n.code || '');
+      if (m) max = Math.max(max, Number(m[1]));
+    }
+    return `${CODE_PREFIX}${padNumber(max + 1, CODE_WIDTH)}`;
+  }
+
   isDescendant(nodeId, ancestorId) {
     let cur = this.store.get('structureNodes', nodeId);
     const seen = new Set();
@@ -43,7 +63,10 @@ export class StructureService {
     if (parentId && !this.store.has('structureNodes', parentId)) throw new NotFoundError('structureNodes', parentId);
     const siblings = this._siblings(parentId);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
-    const node = createStructureNode({ parentId, name: label, code, description, owner, sortOrder });
+    // Allocated inside the repository's write queue, like a metric's code, so
+    // two groups created at once cannot be handed the same number.
+    const assigned = String(code || '').trim() || await this.repo.allocateCode('structureNodes', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
+    const node = createStructureNode({ parentId, name: label, code: assigned, description, owner, sortOrder });
     // The parent this tab can see may already be gone in the database.
     const work = new UnitOfWork().save('structureNodes', node, null).require('structureNodes', parentId);
     const result = await commit(this.repo, this.store, work);
@@ -258,20 +281,46 @@ export class StructureService {
     return true;
   }
 
-  /** Move a metric from one node to another: one link record changes, nothing else. */
+  /**
+   * Move a metric from one node to another: one link record changes, nothing
+   * else.
+   *
+   * The link's token says nothing about the group it is moving to, so the
+   * target group is re-read inside the transaction rather than trusted from
+   * this tab's mirror — otherwise a group deleted elsewhere accepts the
+   * metric and leaves a placement pointing at nothing. When the metric is
+   * already placed in the target, the source link only goes while that
+   * target link is still there.
+   */
   async moveMetric(metricId, fromNodeId, toNodeId) {
-    if (!this.store.has('structureNodes', toNodeId)) throw new NotFoundError('structureNodes', toNodeId);
-    const links = this.selectors.placementsByMetric(metricId);
-    const link = links.find((l) => l.structureNodeId === fromNodeId);
-    if (!link) return this.placeMetric(metricId, toNodeId);
-    const existingAtTarget = links.find((l) => l.structureNodeId === toNodeId);
-    if (existingAtTarget) {
-      await this.removePlacement(link.id);
-      return this.store.get('metricStructures', existingAtTarget.id);
-    }
-    const saved = await this.repo.saveMetricStructure({ ...link, structureNodeId: toNodeId }, tokenOf(link));
-    this.store.upsert('metricStructures', saved);
-    return saved;
+    let movedId = null;
+    await commitExclusive(this.repo, this.store, (tx) => {
+      if (!tx.get('structureNodes', toNodeId)) throw new NotFoundError('structureNodes', toNodeId);
+      if (!tx.get('metrics', metricId)) throw new NotFoundError('metrics', metricId);
+      const links = tx.list('metricStructures').filter((l) => l.metricId === metricId);
+      const source = links.find((l) => l.structureNodeId === fromNodeId) || null;
+      const already = links.find((l) => l.structureNodeId === toNodeId) || null;
+      const work = new UnitOfWork().require('structureNodes', toNodeId);
+      if (already) {
+        movedId = already.id;
+        if (!source) return work;
+        work.require('metricStructures', already.id);
+        work.remove('metricStructures', source.id, tokenOf(source));
+        // A metric keeps exactly one primary placement.
+        if (source.isPrimary && !already.isPrimary) work.save('metricStructures', { ...already, isPrimary: true }, tokenOf(already));
+        return work;
+      }
+      if (!source) {
+        const link = createMetricStructure({ metricId, structureNodeId: toNodeId, isPrimary: links.length === 0 });
+        movedId = link.id;
+        work.require('metrics', metricId).save('metricStructures', link, null);
+        return work;
+      }
+      movedId = source.id;
+      work.save('metricStructures', { ...source, structureNodeId: toNodeId }, tokenOf(source));
+      return work;
+    });
+    return this.store.get('metricStructures', movedId);
   }
 }
 

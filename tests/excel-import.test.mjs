@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContext, TT, GD } from './_setup.mjs';
-import { writeWorkbook, readWorkbook } from '../src/services/xlsx.js';
+import { freshFactory, freshDbName, openTab, rawOpen, rawAll } from './_idb.mjs';
+import { DB_VERSION } from '../src/repositories/local-repository.js';
+import { writeWorkbook, readWorkbook, CellError } from '../src/services/xlsx.js';
 import { buildTemplateWorkbook, TEMPLATE_SHEETS, catalogueRows } from '../src/services/excel-template.js';
 import { readTemplateWorkbook, planExcelImport, previewExcelImport, applyExcelImport } from '../src/services/excel-import.js';
 import { buildExportWorkbook, defaultExportSelection, exportSource, EXPORT_DATASETS } from '../src/services/excel-export.js';
@@ -128,7 +130,7 @@ test('rows that cannot be applied are errors with sheet and row; nothing is impo
   assert.match(plan.errors.find((e) => e.row === 3 && e.sheet === 'Bindings').message, /Formula is required/);
   assert.ok(plan.warnings.some((w) => w.code === 'UNKNOWN_SHEET' && w.sheet === 'Extra'));
   assert.equal(plan.snapshot, null);
-  assert.throws(() => applyExcelImport(plan, ctx.backup), /has errors/);
+  await assert.rejects(() => applyExcelImport(plan, ctx.backup), /has errors/);
 });
 
 test('a missing required column is reported once, on the header row; a title row above the header is fine', async () => {
@@ -223,4 +225,157 @@ test('the Excel report: chosen datasets and fields, a cover sheet, themed header
   assert.equal(fullWb.sheets.length, EXPORT_DATASETS.length);
   const rows = catalogueRows(ctx.store);
   assert.equal(fullWb.sheets[0].rows.length, rows.metrics.length + 1);
+});
+
+/**
+ * Two ways a file can look like it worked and not have worked.
+ *
+ * A blank cell means "keep what the record has", which is what makes a
+ * partial sheet usable. That contract is only safe while a blank really is
+ * a blank: an Excel error and a heading nobody recognises both used to read
+ * as "nothing to do here" and import cleanly.
+ */
+test('an Excel error cell is refused, not read as a blank that keeps the old value', async () => {
+  const ctx = await createContext();
+  const revenue = ctx.store.get('metrics', 'm-revenue');
+  const read = readTemplateWorkbook({ sheets: [{ name: 'Metrics', rows: [
+    ['Code', 'Name', 'Definition'],
+    [revenue.code, new CellError('#N/A'), 'Định nghĩa mới từ file'],
+  ] }] });
+  assert.deepEqual(read.sheets.metrics.cellErrors, [{ row: 2, column: 'Name', code: '#N/A' }]);
+  const plan = planExcelImport(read, ctx.store);
+  assert.equal(plan.ok, false);
+  assert.deepEqual(plan.errors.map((e) => [e.sheet, e.row]), [['Metrics', 2]]);
+  assert.match(plan.errors[0].message, /Name holds the Excel error #N\/A/);
+  assert.equal(plan.snapshot, null, 'nothing is planned until the workbook is fixed');
+  assert.equal(ctx.store.get('metrics', 'm-revenue').name, revenue.name);
+});
+
+test('an error cell on a skipped row is ignored, like everything else on that row', async () => {
+  const ctx = await createContext();
+  const read = readTemplateWorkbook({ sheets: [{ name: 'Units', rows: [
+    ['Code', 'Name', 'Skip'],
+    ['EXAMPLE', new CellError('#REF!'), 'x'],
+    ['KWH', 'Kilowatt hour', ''],
+  ] }] });
+  assert.deepEqual(read.sheets.units.cellErrors, []);
+  const plan = planExcelImport(read, ctx.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.equal(plan.changes.units.created, 1);
+});
+
+test('a sheet whose headings were renamed is refused, not read as a sheet with no rows', async () => {
+  const ctx = await createContext();
+  const read = readTemplateWorkbook({ sheets: [{ name: 'Metrics', rows: [
+    ['Something renamed', 'Something else'],
+    ['M.000001', 'Tên mới'],
+  ] }] });
+  assert.equal(read.sheets.metrics.rows.length, 0);
+  const plan = planExcelImport(read, ctx.store);
+  assert.equal(plan.ok, false);
+  assert.equal(plan.rowsRead.metrics, 0);
+  assert.deepEqual(plan.errors.map((e) => [e.sheet, e.row]), [['Metrics', 1]]);
+  assert.match(plan.errors[0].message, /No header row recognised on Metrics/);
+});
+
+test('a sheet that was emptied is nothing to complain about', async () => {
+  const ctx = await createContext();
+  const read = readTemplateWorkbook({ sheets: [{ name: 'Metrics', rows: [[], [null, '', '   ']] }] });
+  const plan = planExcelImport(read, ctx.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.deepEqual(plan.errors, []);
+  assert.equal(plan.rowsRead.metrics, 0);
+});
+
+// ---------------------------------------------------------------- two tabs, one database
+/**
+ * An Excel import is an upsert by code, so it may only write what its file
+ * is about. Everything else in the catalogue belongs to whoever is editing
+ * it, including the tab next door.
+ */
+test('two tabs: an import writes what its file is about and leaves the rest of the catalogue alone', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const revenue = a.store.get('metrics', 'm-revenue');
+
+  // Tab A reads a file that renames one metric, and looks at the preview.
+  const wb = await workbookOf({ Metrics: [['Code', 'Name'], [revenue.code, 'Doanh thu thuần']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.equal(plan.changes.metrics.updated, 1);
+  assert.deepEqual(plan.writes.map((w) => [w.op, w.collection, w.record ? w.record.id : w.id]), [['save', 'metrics', 'm-revenue']],
+    'the change set is the one record the file is about, not the whole catalogue');
+
+  // Meanwhile tab B adds a metric and renames another. Neither is in the file.
+  const added = await b.metrics.create({ name: 'Chỉ tiêu của tab bên cạnh' });
+  await b.metrics.update('m-opex', { name: 'Chi phí vận hành (B đổi)' });
+
+  await applyExcelImport(plan, a.backup);
+
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metrics');
+  const byId = new Map(stored.map((m) => [m.id, m]));
+  assert.equal(byId.get('m-revenue').name, 'Doanh thu thuần', 'the file was applied');
+  assert.ok(byId.get(added.id), 'the metric the other tab created is still there');
+  assert.equal(byId.get('m-opex').name, 'Chi phí vận hành (B đổi)', 'the rename the other tab made still stands');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: the restore point holds the catalogue as it is, not as the importing tab last saw it', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const revenue = a.store.get('metrics', 'm-revenue');
+  const wb = await workbookOf({ Metrics: [['Code', 'Name'], [revenue.code, 'Doanh thu thuần']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  const added = await b.metrics.create({ name: 'Chỉ tiêu của tab bên cạnh' });
+
+  const { restorePoint, restorePointError } = await applyExcelImport(plan, a.backup);
+  assert.equal(restorePointError, null);
+  assert.ok(restorePoint, 'the import is undoable');
+  const point = await a.repo.getRestorePoint(restorePoint.id);
+  assert.ok(point.data.metrics.some((m) => m.id === added.id), 'undoing would not delete the other tab\'s work');
+  assert.equal(point.data.metrics.find((m) => m.id === 'm-revenue').name, revenue.name, 'and would put the old name back');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: a record the file and the other tab both changed is a conflict, and nothing is written', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const revenue = a.store.get('metrics', 'm-revenue');
+  const wb = await workbookOf({
+    Metrics: [['Code', 'Name'], [revenue.code, 'Doanh thu thuần'], ['M.000018', 'Chi phí (từ file)']],
+  });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(plan.writes.length, 2);
+
+  await b.metrics.update('m-revenue', { name: 'Doanh thu (B đổi trước)' });
+  await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'ConflictError' && e.collection === 'metrics' && e.id === 'm-revenue');
+
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metrics');
+  const byId = new Map(stored.map((m) => [m.id, m]));
+  assert.equal(byId.get('m-revenue').name, 'Doanh thu (B đổi trước)', 'the other tab\'s edit stands');
+  assert.equal(byId.get('m-opex').name, 'Chi phí vận hành', 'and the rest of the batch did not land either');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: a placement the file drops and the other tab already deleted fails closed', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  // m-volume sits in two groups; the file leaves it in one, which drops the other.
+  const dropped = a.selectors.placementsByMetric('m-volume').find((l) => l.structureNodeId === 's-kd-dt');
+  assert.ok(dropped);
+  const wb = await workbookOf({ Metrics: [['Code', 'Name', 'Structure_Codes'], ['M.000002', '', 'VH.DV']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.ok(plan.writes.some((w) => w.op === 'remove' && w.id === dropped.id));
+
+  await b.structure.removePlacement(dropped.id);
+  await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'NotFoundError' || e.name === 'ConflictError');
+  a.repo.close(); b.repo.close();
 });

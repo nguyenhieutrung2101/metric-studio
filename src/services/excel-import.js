@@ -7,18 +7,27 @@
  *   planExcelImport(read, store)        rows → a full snapshot plus a plan:
  *                                       what is created, updated, unchanged,
  *                                       and every row that cannot be applied
- *   applyExcelImport(plan, backup)      the snapshot through the same door a
- *                                       JSON backup uses: parseSnapshot, a
- *                                       restore point, replaceAll.
+ *   applyExcelImport(plan, backup)      the change set the plan implies, each
+ *                                       record carrying the token it had when
+ *                                       the file was previewed
  *
  * Codes are the keys and the current catalogue is the base: an Excel import
- * is an upsert by code, never a wipe. A row that cannot be resolved (unknown
+ * is an upsert by code, never a wipe. That is why it writes a change set and
+ * not a snapshot. The whole-snapshot replace a JSON backup uses is right
+ * when the file IS the catalogue; here the file is about some of the records
+ * and says nothing about the rest, so replacing would delete whatever
+ * another tab added while this one was reading the preview, and a token
+ * nobody checked would overwrite what another tab edited. The plan is still
+ * built as a whole snapshot, and still passes the same schema boundary; only
+ * the difference between that snapshot and the catalogue it was planned on
+ * is written. A row that cannot be resolved (unknown
  * parent, unknown scenario, an invalid status) is an error naming the sheet
  * and the row, and nothing is imported until the file is fixed — the same
  * stance the JSON boundary takes, with the row number the person needs.
  */
 
 import { COLLECTIONS } from '../core/collections.js';
+import { tokenOf } from '../repositories/repository.js';
 import { createUnit } from '../core/models/unit.js';
 import { createScenario, isValidScenarioCode } from '../core/models/scenario.js';
 import { createStructureNode, createMetricStructure } from '../core/models/structure.js';
@@ -27,7 +36,7 @@ import { createMetric, METRIC_STATUSES } from '../core/models/metric.js';
 import { createBinding, BINDING_TYPES, BINDING_STATUSES, FORMULA_MODES, BindingType } from '../core/models/binding.js';
 import { createDimension, createDimensionMember, createMetricDimension } from '../core/models/dimension.js';
 import { parseSnapshot } from './snapshot-schema.js';
-import { readWorkbook } from './xlsx.js';
+import { readWorkbook, isCellError } from './xlsx.js';
 import { TEMPLATE_SHEETS, SKIP_COLUMN, normalizeHeader } from './excel-template.js';
 import { referenceKey, splitList } from '../utils/text.js';
 import { nowIso } from '../utils/time.js';
@@ -61,6 +70,10 @@ export function readTemplateWorkbook(workbook) {
 }
 
 function readSheet(spec, grid) {
+  // Whether the sheet holds anything at all decides what "no header" means:
+  // an emptied sheet is nothing to say, a sheet full of rows under headings
+  // nobody recognises is a file that will not do what its author expects.
+  const hasContent = grid.some((row) => (row || []).some((cell) => cell != null && String(cell).trim() !== ''));
   const keys = new Map(spec.columns.map((c) => [normalizeHeader(c.key), c.key]));
   keys.set(normalizeHeader(SKIP_COLUMN), SKIP_COLUMN);
   // The header is the first row that names at least two known columns — so
@@ -83,17 +96,26 @@ function readSheet(spec, grid) {
       break;
     }
   }
-  if (headerAt < 0) return { rows: [], headerRow: 0, missingColumns: spec.columns.filter((c) => c.required).map((c) => c.key), unknownColumns: [] };
+  if (headerAt < 0) return { rows: [], headerRow: 0, missingColumns: spec.columns.filter((c) => c.required).map((c) => c.key), unknownColumns: [], cellErrors: [], noHeader: true, hasContent };
   const present = new Set(map.filter(Boolean));
   const missingColumns = spec.columns.filter((c) => c.required && !present.has(c.key)).map((c) => c.key);
   const unknownColumns = (grid[headerAt] || []).map((cell, c) => (!map[c] && cell != null && String(cell).trim() !== '' ? String(cell).trim() : null)).filter(Boolean);
   const rows = [];
+  const cellErrors = [];
   for (let r = headerAt + 1; r < grid.length; r += 1) {
     const values = {};
+    const broken = [];
     let any = false;
     (grid[r] || []).forEach((cell, c) => {
       const key = map[c];
       if (!key) return;
+      if (isCellError(cell)) {
+        // Content, so the row is not mistaken for an empty one, but never a
+        // value: the planner refuses the file before anything is applied.
+        broken.push({ row: r + 1, column: key, code: cell.code });
+        if (key !== SKIP_COLUMN) any = true;
+        return;
+      }
       const v = cellValue(cell);
       if (v === undefined) return;
       values[key] = v;
@@ -101,9 +123,10 @@ function readSheet(spec, grid) {
     });
     if (!any) continue;
     if (values[SKIP_COLUMN] !== undefined) continue;
+    cellErrors.push(...broken);
     rows.push({ row: r + 1, values });
   }
-  return { rows, headerRow: headerAt + 1, missingColumns, unknownColumns };
+  return { rows, headerRow: headerAt + 1, missingColumns, unknownColumns, cellErrors, noHeader: false, hasContent };
 }
 
 function cellValue(cell) {
@@ -126,7 +149,14 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   const errors = [];
   const warnings = [];
   const snapshot = {};
-  for (const c of COLLECTIONS) snapshot[c] = store.list(c).map((r) => JSON.parse(JSON.stringify(r)));
+  // The catalogue as it was when the file was read, by id: what the plan is
+  // built on, what the plan is diffed against, and where every expected
+  // token comes from.
+  const before = {};
+  for (const c of COLLECTIONS) {
+    snapshot[c] = store.list(c).map((r) => JSON.parse(JSON.stringify(r)));
+    before[c] = new Map(store.list(c).map((r) => [r.id, r]));
+  }
   // What happened to each record, by id, so a record two sheets both touch
   // is counted once; `removed` counts links a replaced list no longer has.
   const state = {};
@@ -160,6 +190,16 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
     for (const col of sheet.unknownColumns) warnings.push({ code: 'UNKNOWN_COLUMN', sheet: spec.name, message: `Column "${col}" on ${spec.name} is not part of the template and was ignored` });
     if (sheet.rows.length && sheet.missingColumns.length) {
       errors.push({ sheet: spec.name, row: sheet.headerRow, message: `Required column(s) missing: ${sheet.missingColumns.join(', ')}` });
+    }
+    // A sheet whose headings were renamed reads as a sheet with no rows. It
+    // would import nothing and say nothing, which looks exactly like success.
+    if (sheet.noHeader && sheet.hasContent) {
+      errors.push({ sheet: spec.name, row: 1, message: `No header row recognised on ${spec.name}, so none of its rows were read. Row 1 must hold the column keys: ${spec.columns.map((c) => c.key).join(', ')}` });
+    }
+    // An Excel error is the author's own lookup that did not resolve. Reading
+    // it as a blank would quietly keep the old value on that one field.
+    for (const e of sheet.cellErrors || []) {
+      errors.push({ sheet: spec.name, row: e.row, message: `Column ${e.column} holds the Excel error ${e.code}. Fix the formula in the workbook, or clear the cell to keep the current value` });
     }
   }
   if (!sheetsFound.length) {
@@ -229,6 +269,9 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   const toResolve = new Set();
   const linksByPair = new Map(snapshot.metricDimensions.map((l) => [`${l.metricId}|${l.dimensionId}`, l]));
   const reportsIdx = indexBy(snapshot.reports, (r) => codeKey(r.code));
+  // Which row of the Reports sheet claimed which item, so a kind the file's
+  // own contents contradict is reported on the row that asked for it.
+  const reportRows = new Map();
   const reportLinksByPair = new Map(snapshot.metricReports.map((l) => [`${l.metricId}|${l.reportId}`, l]));
 
   const seenInFile = (spec) => {
@@ -325,6 +368,7 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
       if (sortOrder === false) continue;
       const rec = upsert('reports', existing, { code, name, kind, owner: text(values.Owner), description: text(values.Description), sortOrder });
       remember(reportsIdx, rec, codeKey(code));
+      reportRows.set(rec.id, row);
       if (values.Parent_Code !== undefined) pending.push({ rec, existing, row, parentCode: String(values.Parent_Code).trim() });
     }
     for (const { rec, existing, row, parentCode } of pending) {
@@ -567,6 +611,30 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
     }
   }
 
+  // ---- what an item holds decides what it may be
+  // The sheets are read one after another, so a row that turns a report into
+  // a folder is only wrong once the whole file is known: the metrics may be
+  // linked by an earlier sheet, by a later one, or already be in the
+  // catalogue. The rule the UI and the service enforce is therefore checked
+  // here on the state the plan would produce, and reported on the row that
+  // asked for the kind.
+  {
+    const spec = specOf('reports');
+    const children = new Map();
+    for (const r of snapshot.reports) if (r.parentId) children.set(r.parentId, (children.get(r.parentId) || 0) + 1);
+    const links = new Map();
+    for (const l of snapshot.metricReports) links.set(l.reportId, (links.get(l.reportId) || 0) + 1);
+    for (const r of snapshot.reports) {
+      const row = reportRows.get(r.id);
+      // An item this file never mentions is the catalogue's business, not
+      // this import's: a pre-existing problem must not refuse the file.
+      if (row === undefined) continue;
+      const label = r.code || r.name;
+      if (r.kind === ReportKind.FOLDER && links.get(r.id)) err(spec, row, `"${label}" still shows ${links.get(r.id)} metric(s); a folder cannot show metrics`);
+      if (r.kind === ReportKind.REPORT && children.get(r.id)) err(spec, row, `"${label}" still holds ${children.get(r.id)} sub-item(s); a report cannot hold sub-items`);
+    }
+  }
+
   if (errors.length) return { ok: false, errors, warnings, changes: summarize(), snapshot: null, parsed: null, rowsRead, sheetsFound };
   // A formula that arrived or changed is resolved against the catalogue the
   // file produces, so its cache is right from the start and the boundary
@@ -585,7 +653,8 @@ export function planExcelImport(read, store, { now = nowIso() } = {}) {
   // The same boundary a JSON backup passes: the plan only builds the file.
   const parsed = parseSnapshot(snapshot);
   if (!parsed.ok) for (const e of parsed.errors) errors.push({ sheet: '', row: 0, message: e });
-  return { ok: parsed.ok, errors, warnings, changes: summarize(), snapshot, parsed, rowsRead, sheetsFound };
+  const writes = parsed.ok ? changeSet(before, parsed.data) : [];
+  return { ok: parsed.ok, errors, warnings, changes: summarize(), snapshot, parsed, writes, rowsRead, sheetsFound };
 
   // ---------------------------------------------------------------- helpers bound to this plan
   function touch(rec, collection) {
@@ -659,6 +728,48 @@ function specOf(key) {
   return TEMPLATE_SHEETS.find((s) => s.key === key);
 }
 
+/** Fields the repository owns, which say nothing about whether a record changed. */
+const NOT_CONTENT = new Set(['concurrencyToken']);
+
+/**
+ * A record as it is worth comparing: keys sorted, so two objects that hold
+ * the same values compare equal whichever order they were built in, and the
+ * repository's own bookkeeping left out.
+ */
+function fingerprint(record) {
+  const keys = Object.keys(record).filter((k) => !NOT_CONTENT.has(k)).sort();
+  return JSON.stringify(keys.map((k) => [k, record[k]]));
+}
+
+/**
+ * The difference between the catalogue the plan was built on and the
+ * catalogue the plan describes, as operations the unit of work can apply.
+ *
+ * Every write carries the token its record had at planning time, so a record
+ * another tab has touched since fails the batch instead of being overwritten,
+ * and a record this file never mentions is not in the set at all.
+ *
+ * Removals come first, and in reverse collection order: an id whose record
+ * is replaced rather than updated has to release its unique key before the
+ * new one takes it.
+ */
+function changeSet(before, data) {
+  const saves = [];
+  const removes = [];
+  for (const c of COLLECTIONS) {
+    const kept = new Set();
+    for (const record of data[c]) {
+      kept.add(record.id);
+      const prev = before[c].get(record.id);
+      if (!prev) saves.push({ op: 'save', collection: c, record, expectedToken: null });
+      else if (fingerprint(prev) !== fingerprint(record)) saves.push({ op: 'save', collection: c, record, expectedToken: tokenOf(prev) });
+    }
+    for (const [id, prev] of before[c]) if (!kept.has(id)) removes.push({ op: 'remove', collection: c, id, expectedToken: tokenOf(prev) });
+  }
+  removes.reverse();
+  return [...removes, ...saves];
+}
+
 /** A text field: undefined when the cell was blank (keep), '' when it said CLEAR. */
 function text(value) {
   if (value === undefined) return undefined;
@@ -702,8 +813,15 @@ export async function previewExcelImport(bytes, store) {
   return { workbook, read, plan: planExcelImport(read, store) };
 }
 
-/** The snapshot the plan built, through the backup service's validated import. */
-export function applyExcelImport(plan, backup, { label = 'Before Excel import' } = {}) {
-  if (!plan || !plan.ok || !plan.snapshot) throw new Error('The Excel import plan has errors; nothing was imported');
-  return backup.importSnapshot(plan.snapshot, { label });
+/**
+ * The change set the plan built, through the backup service.
+ *
+ * The plan has already passed the schema boundary; what is written here is
+ * the difference it makes, record by record, against the tokens it was
+ * planned on. A catalogue that moved underneath fails the whole batch.
+ */
+export async function applyExcelImport(plan, backup, { label = 'Before Excel import' } = {}) {
+  if (!plan || !plan.ok || !plan.writes) throw new Error('The Excel import plan has errors; nothing was imported');
+  const result = await backup.applyChanges(plan.writes, { label });
+  return { ...result, counts: plan.parsed.counts, repairs: plan.parsed.repairs };
 }

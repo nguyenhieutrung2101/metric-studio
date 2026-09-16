@@ -2,6 +2,30 @@
  * Hash router: #/metrics?node=abc&metric=xyz
  * route = { path: 'metrics', params: { node: 'abc', metric: 'xyz' } }
  */
+/**
+ * A router addressed to one page, for a view that is not always the one
+ * showing.
+ *
+ * Views keep their store subscriptions while hidden, which is what makes
+ * coming back to one instant. It also means a change made somewhere else can
+ * move a hidden view's selection — a rename that drops a row out of its
+ * search, an import that removes it — and writing that to the URL would
+ * rewrite the route of the page the user is actually looking at, leaving a
+ * bookmark that no longer describes the screen. A write from a page that is
+ * not current is therefore dropped: the view's own state still changes, only
+ * the URL is left to whoever owns it. Everything else passes straight
+ * through, navigation included, because navigating is something a person
+ * asked for.
+ */
+export function scopedRouter(router, path) {
+  const scoped = Object.create(router);
+  scoped.setParams = (patch) => {
+    if (router.current.path !== path) return;
+    router.setParams(patch);
+  };
+  return scoped;
+}
+
 export function createRouter({ defaultPath = 'metrics' } = {}) {
   const handlers = new Set();
   const paramHandlers = new Set();

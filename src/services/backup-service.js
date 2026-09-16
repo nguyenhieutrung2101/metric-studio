@@ -1,5 +1,6 @@
 import { COLLECTIONS, SCHEMA_VERSION } from '../core/collections.js';
 import { parseSnapshot, APP_ID } from './snapshot-schema.js';
+import { commit } from './unit-of-work.js';
 
 /**
  * BackupService — JSON export, validated import, and the restore points that
@@ -102,6 +103,32 @@ export class BackupService {
     const saved = await this.repo.replaceAll(parsed.data);
     this.store.hydrate(saved);
     return { counts: parsed.counts, repairs: parsed.repairs, restorePoint: point, restorePointError: error };
+  }
+
+  /**
+   * Apply a set of changes a caller planned against this catalogue, each
+   * write carrying the token its record had at planning time.
+   *
+   * The other way in, and the one an upsert takes. `importSnapshot` replaces
+   * everything, which is exactly right when the file IS the catalogue and
+   * exactly wrong when it is about part of it: a replace deletes whatever
+   * another tab created meanwhile, and does so without a single token being
+   * checked. Here nothing outside the plan is touched, and a record that
+   * moved under the plan's feet fails the batch rather than being
+   * overwritten — nothing at all is written in that case, and the caller is
+   * expected to plan again against what is now there.
+   *
+   * @returns {Promise<{changed, restorePoint, restorePointError}>}
+   */
+  async applyChanges(writes, { label = 'Before import' } = {}) {
+    if (!Array.isArray(writes)) throw new Error('A change set is required');
+    if (!writes.length) return { changed: 0, restorePoint: null, restorePointError: null };
+    // A restore point is supposed to hold the catalogue as it is, not as this
+    // tab last saw it, so whatever other tabs wrote is read back first.
+    if (typeof this.repo.refresh === 'function') await this.repo.refresh();
+    const { point, error } = await this._createRestorePoint(label);
+    await commit(this.repo, this.store, writes);
+    return { changed: writes.length, restorePoint: point, restorePointError: error };
   }
 
   // ------------------------------------------------------------ restore points

@@ -370,9 +370,20 @@ function parseStyles(xml) {
   return dateXf;
 }
 
+/**
+ * The most cells a single sheet may be turned into.
+ *
+ * A grid is the shape the rest of the importer reads, and a grid costs its
+ * area, not its contents. A workbook of a few kilobytes can name a cell far
+ * out on the sheet and ask for tens of millions of slots, so what is asked
+ * for is measured before it is allocated.
+ */
+const MAX_SHEET_CELLS = 4_000_000;
+
 function parseSheet(root, sst, dateXf) {
   const rows = [];
   let maxCol = 0;
+  let lastValueRow = -1;
   for (const row of childrenOf(firstChild(root, 'sheetData'), 'row')) {
     const rAttr = Number(attr(row, 'r'));
     const r = Number.isFinite(rAttr) && rAttr > 0 ? rAttr - 1 : rows.length;
@@ -383,21 +394,58 @@ function parseSheet(root, sst, dateXf) {
       const m = ref ? /^([A-Z]+)/i.exec(ref) : null;
       const col = m ? colIndex(m[1]) : nextCol;
       nextCol = col + 1;
-      cells[col] = cellValue(c, sst, dateXf);
-      maxCol = Math.max(maxCol, col + 1);
+      const value = cellValue(c, sst, dateXf);
+      cells[col] = value;
+      // A cell that holds nothing but a border or a fill says where someone
+      // once formatted, not where the data reaches. Letting it set the
+      // extent is how a two-row sheet becomes a two-million-cell grid.
+      if (value !== null) {
+        maxCol = Math.max(maxCol, col + 1);
+        lastValueRow = Math.max(lastValueRow, r);
+      }
     }
     rows[r] = cells;
   }
+  const height = lastValueRow + 1;
+  if (height * maxCol > MAX_SHEET_CELLS) {
+    throw new Error(`A sheet of ${height} rows × ${maxCol} columns is more than this can read at once (${MAX_SHEET_CELLS.toLocaleString('en-US')} cells)`);
+  }
   // Dense grid: every row has every column, missing cells are null.
   const out = [];
-  for (let r = 0; r < rows.length; r += 1) {
+  for (let r = 0; r < height; r += 1) {
     const src = rows[r] || [];
     const row = new Array(maxCol).fill(null);
-    for (let c = 0; c < maxCol; c += 1) if (src[c] !== undefined) row[c] = src[c];
+    for (let c = 0; c < maxCol; c += 1) if (src[c] !== undefined && src[c] !== null) row[c] = src[c];
     out.push(row);
   }
   while (out.length && out[out.length - 1].every((v) => v == null || v === '')) out.pop();
   return out;
+}
+
+/**
+ * An Excel error cell: #N/A, #REF!, #VALUE! and the rest.
+ *
+ * It is not a value, and it is emphatically not a blank. The importer reads
+ * a blank as "keep what the record already has", so folding an error into
+ * null would turn a broken lookup in the workbook into a silent no-op on
+ * exactly the field the author meant to set.
+ */
+export class CellError {
+  constructor(code) {
+    this.code = String(code || '').trim() || '#ERROR';
+  }
+
+  toString() {
+    return this.code;
+  }
+
+  toJSON() {
+    return this.code;
+  }
+}
+
+export function isCellError(value) {
+  return value instanceof CellError;
 }
 
 function cellValue(c, sst, dateXf) {
@@ -412,7 +460,7 @@ function cellValue(c, sst, dateXf) {
   if (t === 'inlineStr') return richText(firstChild(c, 'is'));
   if (t === 'str') return raw;
   if (t === 'b') return raw === '1' || raw === 'true';
-  if (t === 'e') return null;
+  if (t === 'e') return new CellError(raw);
   if (t === 'd') return raw;
   if (raw === '') return null;
   const num = Number(raw);

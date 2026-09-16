@@ -519,11 +519,32 @@ as a list replace the metric's list, members are re-levelled, and a formula
 that arrived or changed is resolved against the catalogue the file produces.
 Every row that cannot be applied — an unknown parent, unit, scenario or
 member code, an invalid status, a duplicate code in the file, a code that
-matches two existing records — is an error naming the sheet and the row, and
-a plan with errors has no snapshot. A clean plan is a full snapshot that
-goes through `parseSnapshot` and `BackupService.importSnapshot` exactly as a
-JSON backup would, restore point included. The template and the importer
-share one sheet definition (`excel-template.js`), so they cannot drift.
+matches two existing records, an Excel error cell, a sheet whose headings
+are not recognised, a kind the file's own contents contradict — is an error
+naming the sheet and the row, and a plan with errors has no snapshot.
+
+**An upsert writes a change set, not a snapshot.** A clean plan is still a
+full snapshot and still passes `parseSnapshot`, but what is written is the
+difference between that snapshot and the catalogue it was planned on: one
+operation per record, each carrying the token that record had at preview
+time, applied through the unit of work by `BackupService.applyChanges`.
+`importSnapshot`'s whole-catalogue `replaceAll` is right when the file *is*
+the catalogue, as a JSON backup is, and wrong for a file that is about part
+of it — it would delete whatever another tab created while the preview was
+open and overwrite what another tab edited, with no token checked anywhere.
+Records the file says nothing about are therefore not in the change set at
+all, and a record that moved underneath fails the whole batch, at which
+point the file has to be read again. The restore point is taken after
+catching up with what other tabs wrote, so undoing an import does not undo
+their work as well. The template and the importer share one sheet definition
+(`excel-template.js`), so they cannot drift.
+
+**What a file may cost is bounded.** A ZIP entry states how big it will be
+once inflated and a small file can state a very large number, so both the
+claim and the result are budgeted (64 MB per part, 256 MB per file). A grid
+costs its area rather than its contents, so a cell holding nothing but a
+style never sets the extent of a sheet, and a sheet that really is enormous
+is refused (4,000,000 cells) instead of allocated.
 
 `xlsx.js` writes and reads the workbook itself: `zip.js` is the container
 (CRC-32, store or raw deflate through the platform's Compression streams),
