@@ -190,7 +190,7 @@ export async function start(rootEl) {
       const m = mounted.get(active.path);
       m.view.destroy();
       m.host.replaceChildren();
-      m.view = VIEWS[active.path](m.host, ctx);
+      m.view = VIEWS[active.path](m.host, viewContext(ctx, active.path));
       active.view = m.view;
       m.view.update(router.current);
     }

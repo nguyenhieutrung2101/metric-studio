@@ -1,6 +1,7 @@
 import { createReport, createMetricReport, ReportKind } from '../core/models/report.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
-import { ValidationFailure, StaleCascadeError } from './metric-service.js';
+import { ValidationFailure, StaleCascadeError } from './errors.js';
+import { assertReportKindFits, assertParentIsFolder, assertLinkTarget, guardLinkStillPoints } from './invariants.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
 import { padNumber } from '../utils/text.js';
 
@@ -54,7 +55,7 @@ export class ReportService {
     if (!label) throw new ValidationFailure('Name is required', 'name');
     const parent = parentId ? this.store.get('reports', parentId) : null;
     if (parentId && !parent) throw new NotFoundError('reports', parentId);
-    if (parent && parent.kind !== ReportKind.FOLDER) throw new ValidationFailure('Only a folder can hold reports', 'parentId');
+    assertParentIsFolder(parent);
     const siblings = this._siblings(parentId);
     const sortOrder = siblings.length ? siblings[siblings.length - 1].sortOrder + 1 : 1;
     const assigned = String(code || '').trim() || await this.repo.allocateCode('reports', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
@@ -62,10 +63,7 @@ export class ReportService {
     const work = new UnitOfWork().save('reports', report, null);
     if (parentId) {
       work.require('reports', parentId);
-      work.guard('reports', (stored) => {
-        const p = stored.find((r) => r.id === parentId);
-        if (p && p.kind !== ReportKind.FOLDER) throw new ValidationFailure('Only a folder can hold reports', 'parentId');
-      });
+      work.guard('reports', (stored) => assertParentIsFolder(stored.find((r) => r.id === parentId)));
     }
     const result = await commit(this.repo, this.store, work);
     return result.saved.find((s) => s.record.id === report.id).record;
@@ -76,6 +74,9 @@ export class ReportService {
     if (!existing) throw new NotFoundError('reports', id);
     const merged = createReport({ ...existing, ...patch, id, createdAt: existing.createdAt, parentId: existing.parentId, version: existing.version });
     if (!merged.name) throw new ValidationFailure('Name is required', 'name');
+    // As for a group: clearing the field keeps the code, and an item from
+    // before codes were allocated gets one the first time it is edited.
+    if (!merged.code) merged.code = existing.code || await this.repo.allocateCode('reports', { prefix: CODE_PREFIX, width: CODE_WIDTH, pattern: CODE_PATTERN });
     if (merged.kind === existing.kind) {
       const saved = await this.repo.saveReport(merged, expectedToken == null ? tokenOf(existing) : expectedToken);
       this.store.upsert('reports', saved);
@@ -87,14 +88,18 @@ export class ReportService {
     // at all — so this question cannot be answered from a mirror. It is
     // asked again where the data lives, inside the transaction that writes
     // the new kind, and refused there.
-    assertKindFits(merged.kind, this._siblings(id), this.selectors.reportLinks(id));
+    assertReportKindFits(merged.kind, this._siblings(id), this.selectors.reportLinks(id));
     await commitExclusive(this.repo, this.store, (tx) => {
       const current = tx.get('reports', id);
       if (!current) throw new NotFoundError('reports', id);
-      assertKindFits(merged.kind, tx.list('reports').filter((r) => r.parentId === id), tx.list('metricReports').filter((l) => l.reportId === id));
-      const work = new UnitOfWork().save('reports', merged, expectedToken == null ? tokenOf(current) : expectedToken);
-      work.guard('reports', (stored) => assertKindFits(merged.kind, stored.filter((r) => r.parentId === id), []));
-      work.guard('metricReports', (stored) => assertKindFits(merged.kind, [], stored.filter((l) => l.reportId === id)));
+      assertReportKindFits(merged.kind, tx.list('reports').filter((r) => r.parentId === id), tx.list('metricReports').filter((l) => l.reportId === id));
+      // The token belongs to the record this payload was built from, which
+      // is the one the person read. Taking the fresher token the transaction
+      // can see would hand a stale payload a valid-looking ticket and
+      // overwrite whatever another tab saved in between, silently.
+      const work = new UnitOfWork().save('reports', merged, expectedToken == null ? tokenOf(existing) : expectedToken);
+      work.guard('reports', (stored) => assertReportKindFits(merged.kind, stored.filter((r) => r.parentId === id), []));
+      work.guard('metricReports', (stored) => assertReportKindFits(merged.kind, [], stored.filter((l) => l.reportId === id)));
       return work;
     });
     return this.store.get('reports', id);
@@ -115,7 +120,7 @@ export class ReportService {
       if (!item) throw new NotFoundError('reports', id);
       const parent = parentId ? byId.get(parentId) : null;
       if (parentId && !parent) throw new NotFoundError('reports', parentId);
-      if (parent && parent.kind !== ReportKind.FOLDER) throw new ValidationFailure('Only a folder can hold reports', 'parentId');
+      assertParentIsFolder(parent);
       if (parentId && isDescendantIn(byId, parentId, id)) throw new ValidationFailure('Cannot move an item into its own subtree');
 
       const siblings = all.filter((r) => (r.parentId || null) === parentId && r.id !== id).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -134,8 +139,7 @@ export class ReportService {
         work.require('reports', parentId);
         work.guard('reports', (stored) => {
           const live = new Map(stored.map((r) => [r.id, r]));
-          const p = live.get(parentId);
-          if (p && p.kind !== ReportKind.FOLDER) throw new ValidationFailure('Only a folder can hold reports', 'parentId');
+          assertParentIsFolder(live.get(parentId));
           live.set(id, { ...(live.get(id) || item), parentId });
           if (isDescendantIn(live, parentId, id) || hasCycleAt(live, id)) throw new ValidationFailure('Cannot move an item into its own subtree');
         });
@@ -225,17 +229,14 @@ export class ReportService {
     if (!this.store.has('metrics', metricId)) throw new NotFoundError('metrics', metricId);
     const report = this.store.get('reports', reportId);
     if (!report) throw new NotFoundError('reports', reportId);
-    if (report.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
+    assertLinkTarget(report);
     const existing = this.selectors.reportLinks(reportId);
     const dup = existing.find((l) => l.metricId === metricId);
     if (dup) return dup;
     const sortOrder = existing.length ? existing[existing.length - 1].sortOrder + 1 : 1;
     const link = createMetricReport({ metricId, reportId, sortOrder, note });
     const work = new UnitOfWork().require('metrics', metricId).require('reports', reportId).save('metricReports', link, null);
-    work.guard('reports', (stored) => {
-      const r = stored.find((x) => x.id === reportId);
-      if (r && r.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
-    });
+    work.guard('reports', (stored) => assertLinkTarget(stored.find((x) => x.id === reportId)));
     const result = await commit(this.repo, this.store, work);
     return result.saved.find((s) => s.record.id === link.id).record;
   }
@@ -270,22 +271,20 @@ export class ReportService {
     await commitExclusive(this.repo, this.store, (tx) => {
       const target = tx.get('reports', toReportId);
       if (!target) throw new NotFoundError('reports', toReportId);
-      if (target.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
+      assertLinkTarget(target);
       if (!tx.get('metrics', metricId)) throw new NotFoundError('metrics', metricId);
       const links = tx.list('metricReports').filter((l) => l.metricId === metricId);
       const source = links.find((l) => l.reportId === fromReportId) || null;
       const already = links.find((l) => l.reportId === toReportId) || null;
       const work = new UnitOfWork().require('reports', toReportId);
-      work.guard('reports', (stored) => {
-        const r = stored.find((x) => x.id === toReportId);
-        if (r && r.kind !== ReportKind.REPORT) throw new ValidationFailure('Metrics are linked to reports, not to folders', 'reportId');
-      });
+      work.guard('reports', (stored) => assertLinkTarget(stored.find((x) => x.id === toReportId)));
       if (already) {
         movedId = already.id;
         // The metric is already shown there; the move is the removal of the
-        // source link, and only while the target link still exists.
+        // source link, and only while the target link is still the link that
+        // makes that true.
         if (source) {
-          work.require('metricReports', already.id);
+          guardLinkStillPoints(work, 'metricReports', already, 'reportId');
           work.remove('metricReports', source.id, tokenOf(source));
         }
         return work;
@@ -304,12 +303,6 @@ export class ReportService {
     });
     return this.store.get('metricReports', movedId);
   }
-}
-
-/** What an item holds decides what it may be. Thrown from a guard as well as from the planner. */
-function assertKindFits(kind, children, links) {
-  if (kind === ReportKind.REPORT && children.length) throw new ValidationFailure('A folder that holds sub-items cannot become a report', 'kind');
-  if (kind === ReportKind.FOLDER && links.length) throw new ValidationFailure('A report that shows metrics cannot become a folder', 'kind');
 }
 
 function isDescendantIn(byId, id, ancestorId) {

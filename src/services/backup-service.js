@@ -1,6 +1,6 @@
 import { COLLECTIONS, SCHEMA_VERSION } from '../core/collections.js';
 import { parseSnapshot, APP_ID } from './snapshot-schema.js';
-import { commit } from './unit-of-work.js';
+import { commit, UnitOfWork } from './unit-of-work.js';
 
 /**
  * BackupService — JSON export, validated import, and the restore points that
@@ -81,10 +81,9 @@ export class BackupService {
     const raw = input && typeof input === 'object' && input.ok === true && input.data ? input.data : input;
     const parsed = parseSnapshot(raw);
     if (!parsed.ok) throw new Error(parsed.errors.join('; '));
-    const { point, error } = await this._createRestorePoint(label);
-    const saved = await this.repo.replaceAll(parsed.data);
-    this.store.hydrate(saved);
-    return { counts: parsed.counts, repairs: parsed.repairs, restorePoint: point, restorePointError: error };
+    const { snapshot, restorePoint, restorePointError } = await this._replaceAll(parsed.data, label);
+    this.store.hydrate(snapshot);
+    return { counts: parsed.counts, repairs: parsed.repairs, restorePoint, restorePointError };
   }
 
   /** Same path as an import, for the built-in datasets and for clearing. */
@@ -100,8 +99,8 @@ export class BackupService {
       this.store.hydrate({});
       return { counts: emptyCounts(), repairs: [], restorePoint: point, restorePointError: error };
     }
-    const saved = await this.repo.replaceAll(parsed.data);
-    this.store.hydrate(saved);
+    const replaced = await this.repo.replaceAll(parsed.data);
+    this.store.hydrate(replaced);
     return { counts: parsed.counts, repairs: parsed.repairs, restorePoint: point, restorePointError: error };
   }
 
@@ -120,15 +119,54 @@ export class BackupService {
    *
    * @returns {Promise<{changed, restorePoint, restorePointError}>}
    */
-  async applyChanges(writes, { label = 'Before import' } = {}) {
-    if (!Array.isArray(writes)) throw new Error('A change set is required');
-    if (!writes.length) return { changed: 0, restorePoint: null, restorePointError: null };
+  async applyChanges(work, { label = 'Before import' } = {}) {
+    const ops = work instanceof UnitOfWork ? work.ops : work;
+    if (!Array.isArray(ops)) throw new Error('A change set is required');
+    if (!ops.length) return { changed: 0, restorePoint: null, restorePointError: null };
     // A restore point is supposed to hold the catalogue as it is, not as this
     // tab last saw it, so whatever other tabs wrote is read back first.
+    // Catching up first is about the plan, not the backup: a requirement is
+    // checked against this instance before it is checked against the
+    // database, and a mirror that has not heard of a record another tab made
+    // would refuse a file that is perfectly good.
     if (typeof this.repo.refresh === 'function') await this.repo.refresh();
+    let result;
+    try {
+      result = await commit(this.repo, this.store, work, this.supportsRestorePoints() ? { restorePoint: label } : {});
+    } catch (err) {
+      // The plan was built on a catalogue that has moved, and this tab is
+      // now the one holding the old story. Reading it back is what makes
+      // "try again" mean something: planning from the same stale mirror
+      // would fail on the same tokens for ever.
+      await this.reload();
+      throw err;
+    }
+    return { changed: ops.length, restorePoint: result.restorePoint || null, restorePointError: null };
+  }
+
+  /**
+   * Replace everything, with the backup taken by the same operation where the
+   * adapter can do that.
+   *
+   * Reading the catalogue, writing the backup and replacing the data have to
+   * be one thing. Done in sequence, a write that lands in between survives
+   * the replace and is missing from the backup, so undoing deletes it — the
+   * one case a restore point exists to prevent.
+   */
+  async _replaceAll(data, label) {
+    if (this.supportsRestorePoints() && typeof this.repo.replaceAllWithRestorePoint === 'function') {
+      const { snapshot, restorePoint } = await this.repo.replaceAllWithRestorePoint(data, label);
+      return { snapshot, restorePoint, restorePointError: null };
+    }
     const { point, error } = await this._createRestorePoint(label);
-    await commit(this.repo, this.store, writes);
-    return { changed: writes.length, restorePoint: point, restorePointError: error };
+    const snapshot = await this.repo.replaceAll(data);
+    return { snapshot, restorePoint: point, restorePointError: error };
+  }
+
+  /** Catch up with what other tabs wrote: the repository first, then the store. */
+  async reload() {
+    if (typeof this.repo.refresh === 'function') await this.repo.refresh();
+    this.store.hydrate(await this.repo.loadAll());
   }
 
   // ------------------------------------------------------------ restore points
@@ -160,9 +198,8 @@ export class BackupService {
     if (!point) throw new Error('Restore point not found');
     const parsed = parseSnapshot(point.data);
     if (!parsed.ok) throw new Error(parsed.errors.join('; '));
-    await this._createRestorePoint('Before restore');
-    const saved = await this.repo.replaceAll(parsed.data);
-    this.store.hydrate(saved);
+    const { snapshot } = await this._replaceAll(parsed.data, 'Before restore');
+    this.store.hydrate(snapshot);
     return { counts: parsed.counts, repairs: parsed.repairs };
   }
 

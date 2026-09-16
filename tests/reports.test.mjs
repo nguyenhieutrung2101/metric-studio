@@ -340,7 +340,7 @@ test('two tabs: merging a link into a report that has just lost it does not leav
   const targetLink = a.selectors.reportLinksByMetric('m-revenue').find((l) => l.reportId === 'r-fin-q');
   assert.ok(targetLink, 'the demo has the metric in both reports');
   await b.reports.unlinkMetric(targetLink.id);
-  await assert.rejects(() => a.reports.moveLink('m-revenue', 'r-bod-m', 'r-fin-q'), (e) => e.name === 'NotFoundError');
+  await assert.rejects(() => a.reports.moveLink('m-revenue', 'r-bod-m', 'r-fin-q'), (e) => e.name === 'ValidationFailure' && /no longer where this change assumed/.test(e.message));
   const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricReports');
   assert.ok(stored.some((l) => l.metricId === 'm-revenue' && l.reportId === 'r-bod-m'), 'the source link survived the refused move');
   a.repo.close(); b.repo.close();
@@ -516,4 +516,82 @@ test('a record left without a code says why that matters', async () => {
   // The demo catalogue itself has none of these.
   const clean = await createContext();
   assert.deepEqual(run(clean).filter((i) => i.code.endsWith('MISSING_CODE')), []);
+});
+
+/**
+ * F02. "The link is still there" and "the metric is still there" are not the
+ * same question, because a link keeps its id when it is moved. Merging drops
+ * the source link on the strength of the target one, so the target link has
+ * to be the link that made the claim true.
+ */
+test('two tabs: a target link moved elsewhere no longer justifies dropping the source link', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  // m-revenue is shown in BOD tháng (source) and Tài chính quý (target).
+  const target = a.selectors.reportLinksByMetric('m-revenue').find((l) => l.reportId === 'r-fin-q');
+  assert.ok(target);
+
+  // Tab A moves that very link on to a third report. Its id does not change.
+  await a.reports.moveLink('m-revenue', 'r-fin-q', 'r-hotel-m');
+  assert.equal(a.store.get('metricReports', target.id).reportId, 'r-hotel-m', 'same record, new target');
+
+  // Tab B, still seeing the old picture, merges the source link into the
+  // target: the metric is "already there", so the source link would go.
+  await assert.rejects(() => b.reports.moveLink('m-revenue', 'r-bod-m', 'r-fin-q'), (e) => e.name === 'ValidationFailure');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricReports');
+  assert.ok(stored.some((l) => l.metricId === 'm-revenue' && l.reportId === 'r-bod-m'), 'the source link is still there');
+  assert.equal(stored.some((l) => l.metricId === 'm-revenue' && l.reportId === 'r-fin-q'), false, 'and the metric really had left the target');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: the same question for a structural placement', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  // m-volume sits in Vận hành dịch vụ (source) and Doanh thu (target).
+  const target = a.selectors.placementsByMetric('m-volume').find((l) => l.structureNodeId === 's-kd-dt');
+  assert.ok(target);
+  await a.structure.moveMetric('m-volume', 's-kd-dt', 's-tc');
+  assert.equal(a.store.get('metricStructures', target.id).structureNodeId, 's-tc');
+
+  // Refused either by the guard, or by the token on the primary placement it
+  // would have promoted — both are the same fact arriving through different
+  // doors, and neither writes anything.
+  await assert.rejects(() => b.structure.moveMetric('m-volume', 's-vh-dv', 's-kd-dt'), (e) => e.name === 'ValidationFailure' || e.name === 'ConflictError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricStructures');
+  assert.ok(stored.some((l) => l.metricId === 'm-volume' && l.structureNodeId === 's-vh-dv'), 'the source placement survived');
+  const primaries = stored.filter((l) => l.metricId === 'm-volume' && l.isPrimary);
+  assert.equal(primaries.length, 1, 'and the metric still has exactly one primary placement');
+  a.repo.close(); b.repo.close();
+});
+
+/**
+ * F08. The payload comes from what the person read; the token has to come
+ * from the same place. Taking the fresher one the transaction can see would
+ * hand a stale payload a valid-looking ticket.
+ */
+test('two tabs: a kind change cannot carry a stale name past a newer record', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const empty = await a.reports.create({ name: 'Trống', kind: ReportKind.REPORT, code: 'RPT.EMPTY', owner: 'A' });
+  await reload(b);
+  await b.reports.update(empty.id, { name: 'B đã đổi tên', owner: 'B' });
+
+  // A's repository catches up with B without A's store noticing, the way an
+  // Excel import leaves it.
+  await a.repo.refresh();
+  assert.equal(a.store.get('reports', empty.id).name, 'Trống', 'the store is still holding the old story');
+
+  await assert.rejects(() => a.reports.update(empty.id, { kind: ReportKind.FOLDER }), (e) => e.name === 'ConflictError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'reports');
+  const after = stored.find((r) => r.id === empty.id);
+  assert.equal(after.name, 'B đã đổi tên', 'the rename stands');
+  assert.equal(after.owner, 'B');
+  assert.equal(after.kind, 'report');
+  a.repo.close(); b.repo.close();
 });

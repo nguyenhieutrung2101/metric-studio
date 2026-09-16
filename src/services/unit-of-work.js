@@ -70,11 +70,11 @@ export class UnitOfWork {
 }
 
 /** Apply a unit of work and mirror the acknowledged result into the store. */
-export async function commit(repo, store, work) {
+export async function commit(repo, store, work, options = {}) {
   const ops = work instanceof UnitOfWork ? work.ops : work;
   if (!ops.length) return { saved: [], removed: [] };
   try {
-    const result = await repo.applyBatch(ops, batchOptions(work));
+    const result = await repo.applyBatch(ops, { ...batchOptions(work), ...options });
     mirror(store, result);
     return result;
   } catch (err) {

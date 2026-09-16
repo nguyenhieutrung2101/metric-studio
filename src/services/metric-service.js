@@ -3,27 +3,14 @@ import { createMetricStructure } from '../core/models/structure.js';
 import { NotFoundError, tokenOf } from '../repositories/repository.js';
 import { referenceKey, padNumber } from '../utils/text.js';
 import { UnitOfWork, commit, commitExclusive } from './unit-of-work.js';
+import { ValidationFailure, StaleCascadeError } from './errors.js';
+
+// Where the services' shared refusals live now; re-exported so every caller
+// that learned them from here still finds them.
+export { ValidationFailure, StaleCascadeError };
 
 /** Records that only exist because of a metric and go with it. */
 const DEPENDENT_COLLECTIONS = ['metricStructures', 'bindings', 'metricDimensions', 'metricReports'];
-
-/** A cascade that missed a dependent the database holds; the caller retries once. */
-export class StaleCascadeError extends Error {
-  constructor(collection, id) {
-    super(`${collection}/${id} appeared after the cascade was planned`);
-    this.name = 'StaleCascadeError';
-    this.collection = collection;
-    this.id = id;
-  }
-}
-
-export class ValidationFailure extends Error {
-  constructor(message, field = null) {
-    super(message);
-    this.name = 'ValidationFailure';
-    this.field = field;
-  }
-}
 
 /**
  * MetricService — the only writer of the `metrics` collection.

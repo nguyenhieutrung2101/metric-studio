@@ -539,12 +539,36 @@ catching up with what other tabs wrote, so undoing an import does not undo
 their work as well. The template and the importer share one sheet definition
 (`excel-template.js`), so they cannot drift.
 
+**A backup and the change it protects are one operation.** A restore point
+is read and written by the same transaction that applies the change, whether
+that change is an Excel change set (`applyBatch` with `restorePoint`) or a
+whole-catalogue replace (`replaceAllWithRestorePoint`). Taken separately —
+read the catalogue, write the backup, then write the data — a record another
+tab saves in between survives the operation and is missing from the backup,
+so undoing it deletes that record: the one outcome a restore point exists to
+prevent. The IndexedDB adapter therefore reads every collection inside the
+writing transaction, and prunes to three points there as well.
+
+**Every rule is stated once.** `services/invariants.js` holds what is true of
+the catalogue — which fields name another record, what a folder may hold,
+what a link must still point at — because each of those questions is asked
+three times over: by the service performing an edit, by the planner previewing
+an import, and by the guard re-checking inside the transaction. Three copies
+of a rule is three chances to fix one and leave the others. A change set
+carries a requirement for every record it names but does not create, and
+guards what an item holds against what the database has that the plan never
+saw; `require` is never used where the question is "does this still point at
+the same thing", because a record keeps its id when it is moved.
+
 **What a file may cost is bounded.** A ZIP entry states how big it will be
 once inflated and a small file can state a very large number, so both the
 claim and the result are budgeted (64 MB per part, 256 MB per file). A grid
 costs its area rather than its contents, so a cell holding nothing but a
 style never sets the extent of a sheet, and a sheet that really is enormous
-is refused (4,000,000 cells) instead of allocated.
+is refused (4,000,000 cells) instead of allocated. The inflate stream is read
+a chunk at a time against the budget left and cancelled on the chunk that
+crosses it, so a header that understates its entry costs one chunk rather
+than its whole claim.
 
 `xlsx.js` writes and reads the workbook itself: `zip.js` is the container
 (CRC-32, store or raw deflate through the platform's Compression streams),

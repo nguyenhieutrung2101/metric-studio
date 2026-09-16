@@ -3,9 +3,22 @@
  * Each item carries both languages; the dialog picks the active one.
  * Bump `version` here and in package.json when a build ships.
  */
-export const APP_VERSION = '0.4.1';
+export const APP_VERSION = '0.4.2';
 
 export const CHANGELOG = [
+  {
+    version: '0.4.2',
+    date: '2026-09-16',
+    title: { en: 'Undo holds everything, and a rule is stated once', vi: 'Hoàn tác giữ lại mọi thứ, và mỗi quy tắc chỉ nói một lần' },
+    items: [
+      { en: 'A restore point is now written by the same transaction that changes the data. Anything another tab saved a moment earlier is inside it, so undoing an import puts your work back without taking theirs away.', vi: 'Điểm khôi phục giờ được ghi bởi chính giao dịch thay đổi dữ liệu. Những gì tab khác vừa lưu đều nằm trong đó, nên hoàn tác một lần nhập sẽ trả lại phần của bạn mà không xoá phần của họ.' },
+      { en: 'An import checks the records it points at, not only the records it writes: a link to a report someone has deleted, or a kind someone has just contradicted, stops the import instead of landing.', vi: 'Nhập liệu kiểm tra cả những bản ghi mà nó trỏ tới, không chỉ bản ghi nó ghi: liên kết vào báo cáo vừa bị xoá, hay loại vừa bị mâu thuẫn, sẽ dừng lần nhập thay vì được ghi vào.' },
+      { en: 'Moving a metric into a place that already shows it no longer trusts that the link is still pointing there; a link keeps its identity when someone else moves it.', vi: 'Chuyển chỉ tiêu vào nơi đã có nó không còn tin rằng liên kết vẫn trỏ về đó; liên kết giữ nguyên danh tính khi người khác chuyển nó đi.' },
+      { en: 'Changing a folder into a report, or the other way round, carries the version you were looking at. It can no longer overwrite a rename someone else saved while you were reading.', vi: 'Đổi thư mục thành báo cáo hay ngược lại sẽ mang theo phiên bản bạn đang xem. Nó không còn ghi đè lên tên mà người khác đã lưu trong lúc bạn đọc.' },
+      { en: 'A refused import brings this tab up to date, so reading the file again works instead of failing the same way; and clearing a code keeps the one the record had.', vi: 'Lần nhập bị từ chối sẽ cập nhật lại tab này, nên đọc lại file là dùng được chứ không lỗi y như cũ; và xoá trống ô mã sẽ giữ lại mã cũ của bản ghi.' },
+      { en: 'A workbook that understates how large it is now stops being read at the limit rather than after it.', vi: 'File Excel khai nhỏ hơn thực tế giờ sẽ bị dừng đọc ngay tại ngưỡng, thay vì sau khi đã vượt.' },
+    ],
+  },
   {
     version: '0.4.1',
     date: '2026-09-15',

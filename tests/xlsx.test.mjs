@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { zipWrite, zipRead, crc32 } from '../src/utils/zip.js';
+import { zipWrite, zipRead, crc32, inflateRaw, deflateRaw } from '../src/utils/zip.js';
 import { parseXml, childrenOf, firstChild, textOf, attr, escapeXml } from '../src/utils/xml.js';
 import { writeWorkbook, readWorkbook, colLetter, colIndex, serialToIso, STYLES, isCellError } from '../src/services/xlsx.js';
 
@@ -170,4 +170,29 @@ test('a part that claims to unpack to more than the budget is refused before it 
   }
   assert.ok(patched > 0, 'the central directory was found');
   await assert.rejects(() => readWorkbook(bytes), /unpacks to 900 MB, more than the 64 MB/);
+});
+
+test('inflating stops at the ceiling rather than reporting on it afterwards', async () => {
+  // 16 MiB of zeros: a few kilobytes on disk, and far past a 1 MiB ceiling.
+  const big = new Uint8Array(16 * 1024 * 1024);
+  const packed = await deflateRaw(big);
+  assert.ok(packed && packed.length < 64 * 1024, 'the compressed form is tiny, as a decompression bomb is');
+  await assert.rejects(() => inflateRaw(packed, { limit: 1024 * 1024, what: '"sheet1.xml"' }), /"sheet1.xml" unpacks to more than 1 MB/);
+  // The same bytes inside the budget come back whole.
+  const whole = await inflateRaw(packed, { limit: 32 * 1024 * 1024 });
+  assert.equal(whole.length, big.length);
+});
+
+test('a part whose header understates it is still refused, on what it really is', async () => {
+  const big = new Uint8Array(70 * 1024 * 1024);
+  const parts = sheetOf('<row r="1"><c r="A1"><v>1</v></c></row>');
+  parts.push({ name: 'xl/media/blob.bin', data: big });
+  const bytes = await zipWrite(parts);
+  assert.ok(bytes.length < 200 * 1024, `the archive itself is small: ${bytes.length} bytes`);
+  // Understate that part in the central directory, the way a crafted file would.
+  const v = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < bytes.length - 4; i += 1) {
+    if (v.getUint32(i, true) === 0x02014b50) v.setUint32(i + 24, 1024, true);
+  }
+  await assert.rejects(() => readWorkbook(bytes), /unpacks to more than 64 MB/);
 });

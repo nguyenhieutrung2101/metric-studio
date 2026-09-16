@@ -135,8 +135,14 @@ export class LocalRepository extends MemoryRepository {
       this._assertWritable();
       return;
     }
-    const { clearAll = false, puts = [], deletes = [], guards = [], requires = [] } = plan;
+    const { clearAll = false, puts = [], deletes = [], guards = [], requires = [], restorePoint = null } = plan;
     const touched = new Set();
+    if (restorePoint) {
+      // A backup of what is there has to be read by the same transaction that
+      // replaces it, or it is a backup of a moment that has already passed.
+      for (const c of COLLECTIONS) touched.add(c);
+      touched.add(RESTORE_STORE);
+    }
     if (clearAll) {
       for (const c of COLLECTIONS) touched.add(c);
       // The catalogue is about to be someone else's; codes are re-derived
@@ -167,9 +173,28 @@ export class LocalRepository extends MemoryRepository {
     const tx = this._db.transaction([...touched], 'readwrite');
     const stale = [];
     const refreshWhole = [];
+    let takenPoint = null;
     try {
       const uniqueCollections = [...touched].filter((c) => UNIQUE_KEYS[c]);
-      await commitChecked(tx, { checks, requires, guards, uniqueCollections }, (onWriteError) => {
+      await commitChecked(tx, { checks, requires, guards, uniqueCollections, capture: restorePoint ? [...COLLECTIONS, RESTORE_STORE] : null }, (onWriteError, captured) => {
+        if (restorePoint && captured) {
+          const data = {};
+          let total = 0;
+          for (const c of COLLECTIONS) {
+            data[c] = captured[c] || [];
+            total += data[c].length;
+          }
+          if (total > 0) {
+            const counts = {};
+            for (const c of COLLECTIONS) counts[c] = data[c].length;
+            takenPoint = { ...restorePoint, counts, data };
+            tx.objectStore(RESTORE_STORE).put(takenPoint);
+            // Three points are kept; the oldest go in this transaction too,
+            // so the store never holds more than it promises.
+            const keep = [...(captured[RESTORE_STORE] || []), takenPoint].sort((a, b) => (b.seq || 0) - (a.seq || 0) || String(b.createdAt).localeCompare(String(a.createdAt)));
+            for (const old of keep.slice(3)) tx.objectStore(RESTORE_STORE).delete(old.id);
+          }
+        }
         if (clearAll) {
           for (const c of COLLECTIONS) tx.objectStore(c).clear();
           tx.objectStore(SEQUENCE_STORE).clear();
@@ -194,6 +219,7 @@ export class LocalRepository extends MemoryRepository {
         onStale: (collection, id, stored) => stale.push({ collection, id, stored }),
         onGuardFailed: (collection, records) => refreshWhole.push({ collection, records }),
       });
+      return { restorePoint: takenPoint };
     } catch (err) {
       // No wait for the transaction here: commitChecked only settles on the
       // transaction's own complete/abort/error, so it is already finished.
@@ -443,7 +469,7 @@ function idbRequest(req) {
  * read's callback, which keeps the transaction alive without awaiting inside
  * it.
  */
-function commitChecked(tx, { checks, requires, guards, uniqueCollections }, write, { onStale, onGuardFailed }) {
+function commitChecked(tx, { checks, requires, guards, uniqueCollections, capture = null }, write, { onStale, onGuardFailed }) {
   return new Promise((resolve, reject) => {
     let failure = null;
     const fail = (err) => { if (!failure) failure = err; };
@@ -451,13 +477,17 @@ function commitChecked(tx, { checks, requires, guards, uniqueCollections }, writ
       if (err && err.name === 'ConstraintError') fail(new UniquenessError(collection, key || 'unique index'));
       else fail(err || new Error('IndexedDB write failed'));
     };
+    // Stores read whole so the writer can keep a copy of what was there.
+    // Reading them here, rather than before the transaction, is the whole
+    // point: anything written between the two would be missing from it.
+    const captured = capture ? {} : null;
     const finish = () => {
       if (failure) {
         abort(tx);
         return;
       }
       try {
-        write(onWriteError);
+        write(onWriteError, captured);
       } catch (err) {
         fail(err);
         abort(tx);
@@ -473,15 +503,34 @@ function commitChecked(tx, { checks, requires, guards, uniqueCollections }, writ
     // judged on what is actually stored rather than on a mirror that another
     // connection has already made obsolete.
     const guardReads = guards.map((g) => ({ guard: g, req: null }));
-    if (!checks.length && !guardReads.length && !requires.length) {
+    const captureStores = capture || [];
+    if (!checks.length && !guardReads.length && !requires.length && !captureStores.length) {
       finish();
       return;
     }
-    let pending = checks.length + guardReads.length + requires.length;
+    let pending = checks.length + guardReads.length + requires.length + captureStores.length;
     const settle = () => {
       pending -= 1;
       if (pending === 0) finish();
     };
+    for (const store of captureStores) {
+      let req;
+      try {
+        req = tx.objectStore(store).getAll();
+      } catch (err) {
+        fail(err);
+        settle();
+        continue;
+      }
+      req.onsuccess = () => {
+        captured[store] = req.result || [];
+        settle();
+      };
+      req.onerror = () => {
+        fail(req.error || new Error('IndexedDB read failed'));
+        settle();
+      };
+    }
     for (const check of checks) {
       let req;
       try {

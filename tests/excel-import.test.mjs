@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContext, TT, GD } from './_setup.mjs';
-import { freshFactory, freshDbName, openTab, rawOpen, rawAll } from './_idb.mjs';
+import { freshFactory, freshDbName, openTab, reload, rawOpen, rawAll } from './_idb.mjs';
 import { DB_VERSION } from '../src/repositories/local-repository.js';
 import { writeWorkbook, readWorkbook, CellError } from '../src/services/xlsx.js';
 import { buildTemplateWorkbook, TEMPLATE_SHEETS, catalogueRows } from '../src/services/excel-template.js';
@@ -377,5 +377,118 @@ test('two tabs: a placement the file drops and the other tab already deleted fai
 
   await b.structure.removePlacement(dropped.id);
   await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'NotFoundError' || e.name === 'ConflictError');
+  a.repo.close(); b.repo.close();
+});
+
+/**
+ * F01. A token says a record has not changed. It says nothing about the
+ * records that record names, and an upsert is mostly records naming other
+ * records: a link to a report, a child under a folder, a binding on a
+ * metric. Those are checked where the data lives, at the moment of writing.
+ */
+test('two tabs: an import cannot hang a link on a report that has since been deleted', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const target = await a.reports.create({ name: 'Báo cáo đích', kind: 'report', code: 'RPT.TARGET' });
+  await reload(b);
+
+  const wb = await workbookOf({ Report_Metrics: [['Report_Code', 'Metric_Code'], ['RPT.TARGET', 'M.000001']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.equal(plan.writes.length, 1);
+
+  await b.reports.delete(target.id);
+  await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'NotFoundError' || e.name === 'ConflictError');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metricReports');
+  assert.equal(stored.some((l) => l.reportId === target.id), false, 'no link points at a report that is not there');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: an import cannot turn an item into a report after someone has put something in it', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const folder = await a.reports.create({ name: 'Thư mục trống', kind: 'folder', code: 'RPT.EMPTY' });
+  await reload(b);
+
+  // The file makes it a report. When it was read, that was true of the file
+  // and of the catalogue alike.
+  const wb = await workbookOf({ Reports: [['Code *', 'Name *', 'Kind'], ['RPT.EMPTY', '', 'report']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+
+  // Another tab fills it in the meantime.
+  await b.reports.create({ parentId: folder.id, name: 'Con mới', code: 'RPT.CHILD' });
+  await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'ValidationFailure' && e.field === 'kind');
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'reports');
+  assert.equal(stored.find((r) => r.id === folder.id).kind, 'folder', 'the parent of the new child is still a folder');
+  a.repo.close(); b.repo.close();
+});
+
+test('two tabs: an import cannot make a folder of a report someone has just linked a metric to', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const report = await a.reports.create({ name: 'Báo cáo trống', kind: 'report', code: 'RPT.LONE' });
+  await reload(b);
+  const wb = await workbookOf({ Reports: [['Code *', 'Name *', 'Kind'], ['RPT.LONE', '', 'folder']] });
+  const plan = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+
+  await b.reports.linkMetric('m-revenue', report.id);
+  await assert.rejects(() => applyExcelImport(plan, a.backup), (e) => e.name === 'ValidationFailure' && e.field === 'kind');
+  a.repo.close(); b.repo.close();
+});
+
+test('a file that brings a parent and its child together still imports', async () => {
+  const ctx = await createContext();
+  const wb = await workbookOf({
+    Reports: [
+      ['Code *', 'Name *', 'Kind', 'Parent_Code'],
+      ['RPT.NEW', 'Thư mục mới', 'folder', ''],
+      ['RPT.NEW.M', 'Báo cáo mới', 'report', 'RPT.NEW'],
+    ],
+    Report_Metrics: [['Report_Code', 'Metric_Code'], ['RPT.NEW.M', 'M.000001']],
+  });
+  const plan = planExcelImport(readTemplateWorkbook(wb), ctx.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  // Requiring a parent this very file creates would refuse the file bringing it.
+  const required = plan.work.requires.map((r) => `${r.collection}/${r.id}`);
+  assert.equal(required.some((k) => k.endsWith('RPT.NEW')), false);
+  assert.ok(required.includes('metrics/m-revenue'), 'a metric it does not define is still required');
+  const { changed } = await applyExcelImport(plan, ctx.backup);
+  assert.equal(changed, 3);
+  assert.equal(ctx.store.list('reports').filter((r) => r.code.startsWith('RPT.NEW')).length, 2);
+});
+
+/**
+ * F05. "Read the file again" has to be advice that works. A refused write
+ * leaves this tab holding the old story, and planning from it again would
+ * fail on the same tokens for ever.
+ */
+test('two tabs: after a conflict, reading the file again plans against what is actually there', async () => {
+  const factory = freshFactory();
+  const dbName = freshDbName();
+  const a = await openTab(factory, dbName, { seed: true });
+  const b = await openTab(factory, dbName);
+  const wb = await workbookOf({ Metrics: [['Code', 'Name'], ['M.000001', 'Doanh thu (từ file)']] });
+
+  const first = planExcelImport(readTemplateWorkbook(wb), a.store);
+  await b.metrics.update('m-revenue', { name: 'Doanh thu (B đổi trước)' });
+  await assert.rejects(() => applyExcelImport(first, a.backup), (e) => e.name === 'ConflictError');
+
+  // The refusal brought this tab up to date, so the same file now plans
+  // against the name B saved and applies.
+  assert.equal(a.store.get('metrics', 'm-revenue').name, 'Doanh thu (B đổi trước)');
+  const second = planExcelImport(readTemplateWorkbook(wb), a.store);
+  assert.equal(second.writes.length, 1);
+  const { changed } = await applyExcelImport(second, a.backup);
+  assert.equal(changed, 1);
+  const stored = await rawAll(await rawOpen(factory, dbName, DB_VERSION), 'metrics');
+  assert.equal(stored.find((m) => m.id === 'm-revenue').name, 'Doanh thu (từ file)');
   a.repo.close(); b.repo.close();
 });
