@@ -492,3 +492,36 @@ test('two tabs: after a conflict, reading the file again plans against what is a
   assert.equal(stored.find((m) => m.id === 'm-revenue').name, 'Doanh thu (từ file)');
   a.repo.close(); b.repo.close();
 });
+
+/**
+ * A screen about one kind of record can hand out a template about that one
+ * kind. It has to be the same sheet definition, or a file filled from the
+ * short template would not import the way the long one does.
+ */
+test('a one-sheet template is the same template, cut down', async () => {
+  const ctx = await createContext();
+  const bytes = await buildTemplateWorkbook({ store: ctx.store, language: 'en', includeData: true, only: ['units'] });
+  const workbook = await readWorkbook(bytes);
+  assert.deepEqual(workbook.sheets.map((s) => s.name), ['README', 'Units'], 'the readme and the one sheet asked for');
+
+  const read = readTemplateWorkbook(workbook);
+  assert.deepEqual(Object.keys(read.sheets), ['units']);
+  assert.deepEqual(read.unknownSheets, []);
+  const plan = planExcelImport(read, ctx.store);
+  assert.equal(plan.ok, true, JSON.stringify(plan.errors));
+  assert.deepEqual(plan.writes, [], 'filled with the current units, it asks for nothing');
+
+  // And it upserts by code exactly as the full template does.
+  const edited = await workbookOf({
+    Units: [['Code', 'Name', 'Skip'], ['VND', 'Đồng Việt Nam (đổi tên)', ''], ['KWH', 'Kilowatt giờ', '']],
+  });
+  const upsert = planExcelImport(readTemplateWorkbook(edited), ctx.store);
+  assert.equal(upsert.ok, true, JSON.stringify(upsert.errors));
+  assert.equal(upsert.changes.units.created, 1);
+  assert.equal(upsert.changes.units.updated, 1);
+  assert.equal(upsert.changes.metrics.created + upsert.changes.metrics.updated, 0, 'a units file touches nothing else');
+
+  const blank = await readWorkbook(await buildTemplateWorkbook({ store: ctx.store, language: 'vi', only: ['units'] }));
+  assert.equal(readTemplateWorkbook(blank).sheets.units.rows.length, 0, 'the blank one imports nothing');
+  await assert.rejects(() => buildTemplateWorkbook({ store: ctx.store, only: ['nope'] }), /No template sheet matches/);
+});

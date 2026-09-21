@@ -122,7 +122,7 @@ chips), the main grid or tree, and an **Insights** panel on the right.
 * Click the ⚠ badge for Quality; click an issue to inspect it, double-click to jump to it
 * The URL is the workspace: context, filters, search and selection live in it, so a bookmark, Back/Forward and "back to this page" all mean the same rows; a tile elsewhere opens a page in the context it was counted in
 * A banner above the workspace says where writes are going whenever that is not "saved in this browser": memory only, refused because another tab took over the database, or out of step after a partial write
-* More ▾ holds Master data (units, scenarios), Import / Export, density (comfortable / compact) and the language switch (English / Tiếng Việt)
+* More ▾ holds Master data (units and scenarios, each list in a pane that scrolls on its own; units can be filled in batch from an Excel template), Import / Export, density (comfortable / compact) and the language switch (English / Tiếng Việt)
 
 Saves use optimistic concurrency. If a record was changed elsewhere, the
 drawer shows what changed and offers *Reload latest* or an explicit

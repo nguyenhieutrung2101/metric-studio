@@ -12,6 +12,7 @@
 import { catalogueRows, TEMPLATE_SHEETS, pick } from './excel-template.js';
 import { EDGE_COLUMNS } from './export-tables.js';
 import { writeWorkbook } from './xlsx.js';
+import { formatDateTime } from '../utils/time.js';
 
 const L = (en, vi) => ({ en, vi });
 
@@ -163,7 +164,7 @@ function coverSheet(source, summary, lang, now) {
   const rows = [];
   const push = (...cells) => rows.push(cells);
   push({ v: pick(COVER.title, lang), s: 'title' });
-  push({ v: `${pick(COVER.generated, lang)}: ${now.toISOString().slice(0, 16).replace('T', ' ')}`, s: 'muted' });
+  push({ v: `${pick(COVER.generated, lang)}: ${formatDateTime(now)}`, s: 'muted' });
   push();
   push({ v: pick(COVER.sheets, lang), s: 'label' });
   const hyperlinks = [];

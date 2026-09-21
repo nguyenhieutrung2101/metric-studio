@@ -1,5 +1,5 @@
 import { h, btn, icon, formatNumber } from '../../ui/dom.js';
-import { t, getLanguage } from '../../ui/i18n.js';
+import { t } from '../../ui/i18n.js';
 import { statusChip, severityDot } from '../../ui/components/chip.js';
 import { METRIC_STATUSES } from '../../core/models/metric.js';
 import { debounce } from '../../utils/debounce.js';
@@ -104,7 +104,7 @@ export function mountOverviewView(container, ctx) {
     return card(t('overview.recent'), { link: { label: t('nav.metrics'), onClick: () => go('metrics') }, span: 6 },
       recent.length
         ? h('ul', { class: 'ov-list' }, recent.map((m) => h('li', null, h('button', { type: 'button', class: 'ov-item', on: { click: () => go('metrics', { selected: m.id }) } },
-          h('span', { class: 'mono muted', text: m.code }), h('span', { class: 'ellipsis', text: m.name, title: m.name }), statusChip(m.status), h('span', { class: 'when', text: formatDateTime(m.updatedAt, getLanguage()) })))))
+          h('span', { class: 'mono muted', text: m.code }), h('span', { class: 'ellipsis', text: m.name, title: m.name }), statusChip(m.status), h('span', { class: 'when', text: formatDateTime(m.updatedAt) })))))
         : h('p', { class: 'muted', text: t('overview.noRecent') }),
     );
   }
