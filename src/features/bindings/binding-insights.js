@@ -1,5 +1,5 @@
 import { h, btn, formatNumber } from '../../ui/dom.js';
-import { t, getLanguage } from '../../ui/i18n.js';
+import { t } from '../../ui/i18n.js';
 import { bindingChip, severityDot } from '../../ui/components/chip.js';
 import { insightRow, insightSection, insightStat } from '../../ui/workspace/insights-panel.js';
 import { nodeKey } from '../../core/models/binding.js';
@@ -63,7 +63,7 @@ export function renderBindingInsights(ctx, metricId, scenarioId, { onEdit, onDep
   const meta = b && type ? insightSection(t('drawer.section.bindings'),
     b.legacyCode && insightRow(t('binding.legacyCode'), h('span', { class: 'mono', text: b.legacyCode })),
     b.note && insightRow(t('binding.note'), b.note),
-    insightRow(t('bindings.updated'), formatDateTime(b.updatedAt, getLanguage())),
+    insightRow(t('bindings.updated'), formatDateTime(b.updatedAt)),
   ) : null;
 
   const lineage = insightSection(t('insights.lineage'),

@@ -3,9 +3,19 @@
  * Each item carries both languages; the dialog picks the active one.
  * Bump `version` here and in package.json when a build ships.
  */
-export const APP_VERSION = '0.4.2';
+export const APP_VERSION = '0.4.3';
 
 export const CHANGELOG = [
+  {
+    version: '0.4.3',
+    date: '2026-09-21',
+    title: { en: 'Master data keeps its headings, and units arrive by the hundred', vi: 'Master data giữ nguyên tiêu đề, và đơn vị vào hàng trăm một lúc' },
+    items: [
+      { en: 'Master data is two panes that scroll on their own. However long the list of units gets, the page header, the pane heading and the buttons that act on the list stay where they are, and the column header stays above the rows it names.', vi: 'Master data là hai khung tự cuộn riêng. Danh sách đơn vị dài đến đâu thì tiêu đề trang, tiêu đề khung và các nút thao tác vẫn đứng yên, và dòng tiêu đề cột vẫn ở trên các dòng mà nó đặt tên.' },
+      { en: 'Units can be filled in batch: take a template from the Units pane — blank, or with your units already in it — edit it in Excel and bring it back. It is the same sheet, the same rules and the same preview as the full import, and a file that also fills other sheets is sent to Import / Export instead of being applied here.', vi: 'Đơn vị có thể nhập hàng loạt: tải mẫu ngay ở khung Đơn vị — trống, hoặc đã điền sẵn đơn vị của bạn — sửa trong Excel rồi đưa lại vào. Vẫn là sheet đó, quy tắc đó và bước xem trước đó như bản nhập đầy đủ; file có điền cả sheet khác sẽ được chuyển sang Nhập / Xuất thay vì áp dụng tại đây.' },
+      { en: 'Dates read 21/09/2026 14:05 everywhere — day first, 24-hour clock — instead of following whatever the browser thinks the reader prefers.', vi: 'Ngày giờ hiển thị 21/09/2026 14:05 ở mọi nơi — ngày trước, đồng hồ 24 giờ — thay vì chạy theo thiết lập của trình duyệt.' },
+    ],
+  },
   {
     version: '0.4.2',
     date: '2026-09-16',

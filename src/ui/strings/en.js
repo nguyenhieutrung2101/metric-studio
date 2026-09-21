@@ -514,6 +514,18 @@ export const en = {
 
   // master data
   'master.units': 'Units',
+  'master.subtitle': 'The units and scenarios every metric refers to.',
+  'master.meta': '{units} units · {scenarios} scenarios',
+  'master.noUnits': 'No units yet. Add one, or bring a list in from Excel.',
+  'master.unitsExcel': 'Excel',
+  'master.unitsTemplateFilled': 'Template with my units',
+  'master.unitsTemplateBlank': 'Blank template',
+  'master.unitsImport': 'Import units from Excel…',
+  'master.unitsOnlyFile': 'This file also fills {sheets}. Import it in Import / Export, where the whole catalogue is in view.',
+  'master.unitsNoChange': 'Every unit in that file is already exactly as it is here.',
+  'master.unitsImportTitle': 'Import units',
+  'master.unitsImportMessage': '{create} to create, {update} to update. A restore point is taken first.',
+  'master.unitsImported': 'Units imported: {create} created, {update} updated',
   'master.addUnit': 'Add unit',
   'master.usedBy': 'Used by',
   'master.deleteUnitTitle': 'Delete unit "{code}"?',

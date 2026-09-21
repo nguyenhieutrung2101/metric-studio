@@ -9,6 +9,7 @@ import { EXPORT_DATASETS, buildExportWorkbook, defaultExportSelection, exportSou
 import { DEFAULT_THEME } from '../../services/xlsx.js';
 import { COLLECTIONS } from '../../core/collections.js';
 import { formatDateTime } from '../../utils/time.js';
+import { downloadBlob } from '../../utils/download.js';
 import { getPreference, setPreference } from '../../utils/preferences.js';
 import { excelExportDialog } from './excel-export-dialog.js';
 
@@ -105,14 +106,7 @@ export function mountImportExportView(container, ctx) {
   container.appendChild(root);
 
   // ---------------------------------------------------------------- downloads
-  function download(name, blob) {
-    const url = URL.createObjectURL(blob);
-    const a = h('a', { href: url, download: name });
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
+  const download = (name, blob) => downloadBlob(blob, name);
 
   const stamp = () => new Date().toISOString().slice(0, 10);
 

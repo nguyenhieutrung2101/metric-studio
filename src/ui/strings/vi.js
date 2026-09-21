@@ -514,6 +514,18 @@ export const vi = {
 
   // master data
   'master.units': 'Đơn vị tính',
+  'master.subtitle': 'Đơn vị và kịch bản mà mọi chỉ tiêu tham chiếu tới.',
+  'master.meta': '{units} đơn vị · {scenarios} kịch bản',
+  'master.noUnits': 'Chưa có đơn vị nào. Thêm một đơn vị, hoặc đưa danh sách vào từ Excel.',
+  'master.unitsExcel': 'Excel',
+  'master.unitsTemplateFilled': 'Mẫu kèm đơn vị hiện có',
+  'master.unitsTemplateBlank': 'Mẫu trống',
+  'master.unitsImport': 'Nhập đơn vị từ Excel…',
+  'master.unitsOnlyFile': 'File này còn điền cả {sheets}. Hãy nhập tại Nhập / Xuất, nơi nhìn được toàn bộ danh mục.',
+  'master.unitsNoChange': 'Mọi đơn vị trong file đó đã giống hệt ở đây rồi.',
+  'master.unitsImportTitle': 'Nhập đơn vị',
+  'master.unitsImportMessage': 'Tạo mới {create}, cập nhật {update}. Một điểm khôi phục được tạo trước.',
+  'master.unitsImported': 'Đã nhập đơn vị: tạo {create}, cập nhật {update}',
   'master.addUnit': 'Thêm đơn vị',
   'master.usedBy': 'Số chỉ tiêu dùng',
   'master.deleteUnitTitle': 'Xoá đơn vị "{code}"?',

@@ -17,6 +17,7 @@ import { BINDING_TYPES, BINDING_STATUSES, FORMULA_MODES } from '../core/models/b
 import { METRIC_STATUSES } from '../core/models/metric.js';
 import { writeWorkbook } from './xlsx.js';
 import { referenceKey } from '../utils/text.js';
+import { formatDateTime } from '../utils/time.js';
 
 export const SKIP_COLUMN = 'Skip';
 export const LIST_SEPARATOR = '; ';
@@ -265,7 +266,7 @@ export function catalogueRows(store) {
     structure: [...store.list('structureNodes')].sort((a, b) => a.sortOrder - b.sortOrder || String(a.code).localeCompare(String(b.code))).map((n) => ({ id: n.id, Code: n.code, Name: n.name, Parent_Code: n.parentId ? nodeCode.get(n.parentId) || '' : '', Parent_Name: n.parentId && nodeById.get(n.parentId) ? nodeById.get(n.parentId).name : '', Path: nodePath(n.id), Owner: n.owner, Description: n.description, Sort_Order: n.sortOrder })),
     metrics: store.list('metrics').map((m) => ({
       id: m.id, Code: m.code, Name: m.name, Aliases: join(m.aliases), Unit_Code: m.unitId ? unitCode.get(m.unitId) || '' : '', Unit_Name: m.unitId ? unitName.get(m.unitId) || '' : '', Status: m.status, Owners: join(m.owners), Tags: join(m.tags), Definition: m.definition,
-      Structure_Codes: join(byMetricPlacements.get(m.id)), Structure_Path: primaryNode.has(m.id) ? nodePath(primaryNode.get(m.id)) : '', Dimension_Codes: join(byMetricDims.get(m.id)), Report_Codes: join(byMetricReports.get(m.id)), Updated_At: m.updatedAt,
+      Structure_Codes: join(byMetricPlacements.get(m.id)), Structure_Path: primaryNode.has(m.id) ? nodePath(primaryNode.get(m.id)) : '', Dimension_Codes: join(byMetricDims.get(m.id)), Report_Codes: join(byMetricReports.get(m.id)), Updated_At: formatDateTime(m.updatedAt),
     })).sort(sortCode),
     reports: [...store.list('reports')].sort((a, b) => reportPath(a.id).localeCompare(reportPath(b.id)) || a.sortOrder - b.sortOrder).map((r) => ({ id: r.id, Code: r.code, Name: r.name, Kind: r.kind, Parent_Code: r.parentId ? reportCode.get(r.parentId) || '' : '', Parent_Name: r.parentId ? reportName.get(r.parentId) || '' : '', Path: reportPath(r.id), Owner: r.owner, Description: r.description, Sort_Order: r.sortOrder })),
     reportMetrics: store.list('metricReports').map((l) => ({
@@ -276,7 +277,7 @@ export function catalogueRows(store) {
       Formula: b.type === 'formula' ? b.formulaText : '', Formula_Mode: b.type === 'formula' ? b.formulaMode || 'expression' : '',
       Source_System: b.source.system, Source_Dataset: b.source.dataset, Source_Field: b.source.field, Source_Owner: b.source.owner, Source_Frequency: b.source.frequency,
       Assumption_Value: b.assumption.value, Assumption_Basis: b.assumption.basis, Valid_From: b.assumption.validFrom, Valid_To: b.assumption.validTo,
-      Legacy_Code: b.legacyCode, Status: b.status, Note: b.note, Updated_At: b.updatedAt,
+      Legacy_Code: b.legacyCode, Status: b.status, Note: b.note, Updated_At: formatDateTime(b.updatedAt),
     })).sort((a, b) => String(a.Metric_Code).localeCompare(String(b.Metric_Code), undefined, { numeric: true }) || String(a.Scenario_Code).localeCompare(String(b.Scenario_Code))),
     dimensions: [...store.list('dimensions')].sort((a, b) => a.sortOrder - b.sortOrder || String(a.code).localeCompare(String(b.code))).map((d) => ({ id: d.id, Code: d.code, Name: d.name, Description: d.description, Sort_Order: d.sortOrder })),
     members: [...store.list('dimensionMembers')].sort((a, b) => String(dimCode.get(a.dimensionId)).localeCompare(String(dimCode.get(b.dimensionId))) || a.level - b.level || a.sortOrder - b.sortOrder).map((m) => ({
@@ -309,14 +310,23 @@ const README = {
 };
 
 /**
- * @param {{ store: object, language?: 'en'|'vi', includeData?: boolean, theme?: object, now?: Date }} options
+ * The template, or a part of it.
+ *
+ * `only` narrows the workbook to the sheets named, for a screen that is
+ * about one kind of record and would rather hand out a file about that one
+ * kind. It is the same sheet definition either way, so a file filled from
+ * the short template imports exactly as it would from the long one.
+ *
+ * @param {{ store: object, language?: 'en'|'vi', includeData?: boolean, theme?: object, now?: Date, only?: string[] }} options
  * @returns {Promise<Uint8Array>}
  */
-export async function buildTemplateWorkbook({ store, language = 'en', includeData = false, theme = null, now = new Date() }) {
+export async function buildTemplateWorkbook({ store, language = 'en', includeData = false, theme = null, now = new Date(), only = null }) {
   const lang = language === 'vi' ? 'vi' : 'en';
+  const wanted = only ? TEMPLATE_SHEETS.filter((s) => only.includes(s.key)) : TEMPLATE_SHEETS;
+  if (!wanted.length) throw new Error(`No template sheet matches ${JSON.stringify(only)}`);
   const data = includeData ? catalogueRows(store) : null;
-  const sheets = TEMPLATE_SHEETS.map((spec) => templateSheet(spec, lang, data ? data[spec.key] : null));
-  const readme = readmeSheet(store, lang, includeData, now, sheets.map((s) => s.name));
+  const sheets = wanted.map((spec) => templateSheet(spec, lang, data ? data[spec.key] : null));
+  const readme = readmeSheet(store, lang, includeData, now, sheets.map((s) => s.name), wanted);
   return writeWorkbook({ sheets: [readme, ...sheets], theme, title: pick(README.title, lang), now });
 }
 
@@ -347,19 +357,22 @@ function cellStyle(col, value) {
   return v;
 }
 
-function readmeSheet(store, lang, includeData, now, sheetNames) {
+function readmeSheet(store, lang, includeData, now, sheetNames, specs = TEMPLATE_SHEETS) {
   const rows = [];
   const push = (...cells) => rows.push(cells);
   push({ v: pick(README.title, lang), s: 'title' });
   push({ v: pick(README.intro, lang), s: 'subtitle' });
-  push({ v: `${pick(README.generated, lang)}: ${now.toISOString().slice(0, 16).replace('T', ' ')}`, s: 'muted' });
+  push({ v: `${pick(README.generated, lang)}: ${formatDateTime(now)}`, s: 'muted' });
   push({ v: pick(includeData ? README.withData : README.blank, lang), s: 'subtitle' });
   push();
-  README.rules.forEach((r, i) => push({ v: `${i + 1}.`, s: 'label' }, { v: pick(r, lang), s: 'wrap' }));
+  // A rule about sheets this workbook does not carry is noise on a
+  // one-sheet template, and the reading order only matters across sheets.
+  const rules = specs.length > 1 ? README.rules : README.rules.slice(0, 3);
+  rules.forEach((r, i) => push({ v: `${i + 1}.`, s: 'label' }, { v: pick(r, lang), s: 'wrap' }));
   push();
   push({ v: pick(README.sheets, lang), s: 'label' });
   const hyperlinks = [];
-  TEMPLATE_SHEETS.forEach((spec, i) => {
+  specs.forEach((spec, i) => {
     push({ v: sheetNames[i], s: 'link' }, { v: pick(spec.description, lang), s: 'wrap' });
     hyperlinks.push({ ref: `A${rows.length}`, sheet: sheetNames[i], display: sheetNames[i] });
   });
